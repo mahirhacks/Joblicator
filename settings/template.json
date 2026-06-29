@@ -1,0 +1,38 @@
+{
+    "defaults": {
+        "cv": "cv_professional",
+        "cover_letter": "cover_letter_formal"
+    },
+    "catalog": {
+        "cv_professional": {
+            "name": "Professional CV",
+            "category": "cv",
+            "path": "templates/cv/professional.html.j2",
+            "description": "Clean single-column layout for general roles"
+        },
+        "cv_technical": {
+            "name": "Technical CV",
+            "category": "cv",
+            "path": "templates/cv/technical.html.j2",
+            "description": "Skills-first layout for engineering roles"
+        },
+        "cover_letter_formal": {
+            "name": "Formal Cover Letter",
+            "category": "cover_letter",
+            "path": "templates/cover_letter/formal.html.j2",
+            "description": "Traditional business letter format"
+        },
+        "cover_letter_technical": {
+            "name": "Technical Cover Letter",
+            "category": "cover_letter",
+            "path": "templates/cover_letter/technical.html.j2",
+            "description": "Concise, skills-focused cover letter"
+        }
+    },
+    "export": {
+        "formats": ["pdf", "docx"],
+        "filename_pattern": "{company}_{role}_{date}",
+        "output_dir": "outputs",
+        "date_format": "YYYYMMDD"
+    }
+}

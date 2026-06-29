@@ -1,0 +1,5 @@
+{
+    "LLM" : "qwen3.5-4b",
+    "context_window" : 16384,
+    "temperature" : 0.5
+}

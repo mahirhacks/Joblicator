@@ -1,0 +1,114 @@
+{
+    "titles" : {
+        "title_1" : "Cloud Architect",
+        "title_2" : "Cloud Engineer",
+        "title_3" : "DevOps Engineer",
+        "title_4" : "Software Engineer",
+        "title_5" : "System Administrator",
+        "title_6" : "Network Administrator",
+        "title_7" : "Database Administrator",
+        "title_8" : "Security Engineer"
+    },
+    "contact" : {
+        "name" : "Wajeeh",
+        "email" : "wajeeh@gmail.com",
+        "phone" : "03001234567",
+        "address" : "123 Main St, Anytown, USA",
+        "city" : "Anytown",
+        "state" : "CA",
+        "zip" : "12345",
+        "country" : "USA"
+    },
+    "education" : {
+        "education_1" : {
+            "degree" : "Bachelor of Science",
+            "school" : "University of Anytown",
+            "location" : "Anytown, USA",
+            "startDate" : "2020-01-01",
+            "endDate" : "2024-01-01",
+            "cgpa" : "3.5"
+        },
+        "education_2" : {
+            "degree" : "Master of Science",
+            "school" : "University of Anytown",
+            "location" : "Anytown, USA",
+            "startDate" : "2020-01-01",
+            "endDate" : "2024-01-01",
+            "cgpa" : "3.5"
+        }
+    },
+    "experience" : {
+        "experience_1" : {
+            "company" : "Deloitte",
+            "position" : "Cloud Architect",
+            "location" : "Washington, DC",
+            "startDate" : "2023-01-01",
+            "endDate" : "2026-01-01",
+            "description" : "Cloud Architect at Deloitte"
+        },
+        "experience_2" : {
+            "company" : "Google",
+            "position" : "Cloud Engineer",
+            "location" : "Mountain View, CA",
+            "startDate" : "2026-01-01",
+            "endDate" : "2029-01-01",
+            "description" : "Cloud Engineer at Google"
+        }
+    },
+    "skills" : {
+        "AWS" : "AWS",
+        "Azure" : "Azure",
+        "GCP" : "GCP",
+        "Docker" : "Docker",
+        "Kubernetes" : "Kubernetes",
+        "Linux" : "Linux",
+        "Windows" : "Windows",
+        "Networking" : "Networking",
+        "Security" : "Security",
+        "Database" : "Database",
+        "Programming" : "Programming"
+    },
+    "projects" : {
+        "project_1" : {
+            "name" : "Project Name",
+            "description" : "Description",
+            "startDate" : "2020-01-01",
+            "endDate" : "2024-01-01",
+            "url" : "https://www.project1.com"
+        }
+    },
+    "achievements" : {
+        "achievement_1" : {
+            "name" : "Achievement Name",
+            "description" : "Description",
+            "date" : "2020-01-01"
+        }
+    },
+    "languages" : {
+        "English" : "Native",
+        "Arabic" : "Native",
+        "Urdu" : "Native"
+    },
+    "interests" : {
+        "Cloud Computing" : "Cloud Computing",
+        "Web Development" : "Web Development",
+        "Mobile Development" : "Mobile Development"
+    },
+    "certifications" : {
+        "aws_certified_solutions_architect_associate" : {
+            "description" : "Description",
+            "date" : "2020-01-01",
+            "url" : "https://www.certification1.com"
+        },
+        "aws_certified_developer_associate" : {
+            "description" : "Description",
+            "date" : "2020-01-01",
+            "url" : "https://www.certification2.com"
+        },
+        "aws_certified_sysops_administrator_associate" : {
+            "description" : "Description",
+            "date" : "2020-01-01",
+            "url" : "https://www.certification3.com"
+        }
+    }
+}
