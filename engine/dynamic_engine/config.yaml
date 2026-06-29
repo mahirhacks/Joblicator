@@ -1,0 +1,21 @@
+# Dynamic engine — local Ollama LLM settings
+
+ollama:
+  base_url: http://127.0.0.1:11434
+  model: qwen3.5:4b
+
+generation:
+  temperature: 0.3
+  context_window: 16384
+
+applications:
+  json: applications/local_applications.json
+
+profile:
+  json: settings/profile.json
+
+batching:
+  max_chars: 1200
+
+loops:
+  max_keywords_per_batch: 8
