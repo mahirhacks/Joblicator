@@ -5,14 +5,23 @@ const storageHint = document.getElementById("storage-hint");
 
 let toastTimer = null;
 
+const DEFAULT_JSON = "local_applications.json";
+
 async function loadStorageHint() {
+  storageHint.innerHTML =
+    `Paste a job posting — it gets saved directly to <code>${DEFAULT_JSON}</code>`;
+
   try {
     const response = await fetch("/api/config");
+    if (!response.ok) return;
     const data = await response.json();
-    storageHint.innerHTML =
-      `Paste a job posting — it gets saved directly to <code>${data.json}</code>`;
+    if (data.json) {
+      storageHint.innerHTML =
+        `Paste a job posting — it gets saved directly to <code>${data.json}</code>`;
+    }
   } catch {
-    storageHint.textContent = "Could not load storage config from server.";
+    storageHint.innerHTML +=
+      ' <span class="hint-warn">(Server not reachable — start with <code>python ui/server.py</code>)</span>';
   }
 }
 

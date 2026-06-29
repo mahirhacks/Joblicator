@@ -62,6 +62,11 @@ body {
   border: 1px solid var(--border);
 }
 
+.hint-warn {
+  color: var(--error);
+  font-size: 0.85em;
+}
+
 .form {
   display: flex;
   flex-direction: column;
