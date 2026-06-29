@@ -1,11 +1,11 @@
 """
 Local UI server for Joblication.
 
-Serves ui/ static files and saves job postings directly to
+Serves ui/frontend static files and saves job postings directly to
 applications/local_applications.json via applications/extractor.py.
 
 Run from project root:
-    python ui/server.py
+    python ui/backend/server.py
 
 Then open http://localhost:8080
 """
@@ -18,8 +18,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-UI_DIR = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent.parent
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 HOST = "127.0.0.1"
 PORT = 8080
@@ -71,8 +71,8 @@ class JoblicationHandler(BaseHTTPRequestHandler):
         if not safe or safe.endswith("/"):
             safe = "index.html"
 
-        file_path = (UI_DIR / safe).resolve()
-        if not str(file_path).startswith(str(UI_DIR.resolve())):
+        file_path = (FRONTEND_DIR / safe).resolve()
+        if not str(file_path).startswith(str(FRONTEND_DIR.resolve())):
             self.send_error(403)
             return
         if not file_path.is_file():
@@ -171,7 +171,8 @@ def main() -> None:
     json_path = get_json_path()
     server = HTTPServer((HOST, PORT), JoblicationHandler)
     print(f"Joblication UI -> http://{HOST}:{PORT}")
-    print(f"Writing to -> {json_path}")
+    print(f"Frontend     -> {FRONTEND_DIR}")
+    print(f"Writing to   -> {json_path}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

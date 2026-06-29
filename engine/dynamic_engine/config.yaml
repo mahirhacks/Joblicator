@@ -2,11 +2,12 @@
 
 ollama:
   base_url: http://127.0.0.1:11434
-  model: qwen3.5:4b
+  model: qwen3.5:9b
+  think: false
 
 generation:
-  temperature: 0.3
-  context_window: 16384
+  temperature: 0.5
+  context_window: 32768
 
 applications:
   json: applications/local_applications.json

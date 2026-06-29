@@ -1,3 +1,4 @@
+const GLOBAL_CSS = `
 *,
 *::before,
 *::after {
@@ -203,4 +204,9 @@ textarea {
   background: #3d1f22;
   color: var(--error);
   border: 1px solid #6b2d35;
+}
+`;
+
+export default function GlobalStyles() {
+  return <style>{GLOBAL_CSS}</style>;
 }

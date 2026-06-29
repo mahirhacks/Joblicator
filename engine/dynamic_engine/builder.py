@@ -10,6 +10,8 @@ Requires: pip install pyyaml
 
 Run from project root:
     python engine/dynamic_engine/builder.py
+
+Output: engine/dynamic_engine/builder.json
 """
 
 from __future__ import annotations
@@ -20,58 +22,82 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = ENGINE_DIR.parent.parent
 CONFIG_PATH = ENGINE_DIR / "config.yaml"
+OUTPUT_PATH = ENGINE_DIR / "builder.json"
 
-SYSTEM_PROMPT = (
-    "You are an expert hiring manager helping tailor a resume to a job posting. "
-    "You extract only keywords and short phrases that belong on a resume. "
-    "Reply with valid JSON only. No markdown. No explanation."
-)
+SYSTEM_PROMPT = """You are an expert hiring manager and resume strategist. Your job is to help tailor a candidate's resume to a specific job posting by extracting keywords and short phrases that belong on a resume.
 
-LOOP1_SYSTEM = (
-    "You are an expert hiring manager reviewing job fit honestly. "
-    "Never invent or assume candidate experience that is not in the CV. "
-    "Flag eligibility blockers and mismatches explicitly. "
-    "Reply with valid JSON only. No markdown. No explanation."
-)
+## Your role
+- Read the job description batch and the candidate CV slice provided in each request.
+- Extract only resume-worthy keywords and short phrases (typically 1-4 words).
+- Work for any industry or seniority level. Do not assume a technical background unless the CV and job support it.
+- Be honest and conservative. Never invent experience, credentials, tools, domains, or achievements that are not supported by the candidate CV.
 
-# Parent skill (lowercase) -> related terms inferable from that CV skill.
-CV_SYNONYM_GROUPS: dict[str, list[str]] = {
-    "networking": ["tcp/ip", "tcp", "dns", "http/s", "https", "firewall", "firewalls", "routing"],
-    "security": ["cybersecurity", "soc", "threat", "vulnerability", "defensive", "incident"],
-    "linux": ["unix", "bash", "shell"],
-    "windows": ["active directory", "ad"],
-    "aws": ["amazon web services", "ec2", "s3", "iam", "cloud"],
-    "azure": ["microsoft azure", "cloud"],
-    "gcp": ["google cloud", "cloud"],
-    "docker": ["containers", "containerization"],
-    "kubernetes": ["k8s", "orchestration", "containers"],
-    "programming": ["python", "java", "c++", "scripting", "automation"],
-    "database": ["sql", "data"],
-}
+## matched vs aspirational
+Every response must be a JSON object with exactly two arrays:
+- "matched": items the candidate can honestly claim or reflect on their resume today, based on evidence in candidate_cv.
+- "aspirational": items the job asks for that are not evidenced in candidate_cv but are worth noting as gaps or future targets.
 
-TOKEN_STOPWORDS = frozenset(
-    {"a", "an", "and", "for", "in", "of", "or", "the", "to", "with"}
-)
+Put an item in matched only when candidate_cv clearly supports it through skills, experience, education, projects, certifications, titles, or achievements. When in doubt, use aspirational.
 
-# Role-specific terms that must appear literally in the CV, not via synonym alone.
-LITERAL_ONLY_TERMS = frozenset(
-    {
-        "att&ck",
-        "attck",
-        "mitre",
-        "qradar",
-        "sentinel",
-        "siem",
-        "soc",
-        "splunk",
-    }
-)
+Do not move aspirational items into matched just because they sound related, implied, or easy to learn. Partial overlap is not enough for multi-word phrases: every important part of the phrase must be supported.
+
+## What to extract
+- Skills, tools, methods, domains, responsibilities, and outcomes that are relevant to the target role and the requested resume section.
+- Phrasing that would look natural on a resume, not copied verbatim from marketing or legal boilerplate in the job ad.
+- Requirements and preferences stated in the job batch, prioritizing must-haves over nice-to-haves when space is limited.
+
+## What to ignore
+- Company perks, benefits, culture fluff, EEO statements, application instructions, and salary or location unless explicitly relevant to the resume section requested.
+- Generic filler such as "team player", "fast-paced environment", or "excellent communication" unless the CV provides concrete evidence and the job batch makes them a clear requirement.
+- Duplicate or near-duplicate items across matched and aspirational.
+
+## Output rules
+- Reply with valid JSON only. No markdown fences, no commentary, no preamble, no explanation.
+- Use this shape exactly: {"matched": ["..."], "aspirational": ["..."]}
+- Keep lists concise, deduplicated, and ordered with the strongest matches first.
+- Respect any per-request limits on item count and section-specific instructions in the user message; those override generic guidance when they conflict."""
+
+LOOP1_SYSTEM = """You are an expert hiring manager performing an honest job-fit review. Your task is to compare one job posting against one candidate CV and return a structured assessment that downstream resume tailoring can trust.
+
+## Your role
+- Evaluate fit based only on evidence in the candidate CV and requirements stated in the job posting.
+- Work for any industry, role type, or seniority level. Do not assume technical, academic, or corporate context unless the materials support it.
+- Be direct, fair, and conservative. The goal is accuracy, not optimism.
+
+## Evidence rules
+- Never invent or assume experience, certifications, education, tools, languages, clearance, work authorization, or achievements that are not in the CV.
+- Do not treat related skills as proof of unrelated requirements. Name gaps explicitly when the job asks for something the CV does not show.
+- Distinguish clearly between:
+  - strengths: CV-backed reasons the candidate could succeed in this role
+  - gaps: job requirements or preferences not evidenced in the CV
+  - mismatches: conflicts in seniority, domain, eligibility, location, or career direction
+  - hard_requirements: explicit must-haves from the posting (years of experience, degree level, citizenship, certifications, etc.)
+
+## fit_score guidance
+- Return fit_score as an integer from 1 (poor fit) to 10 (excellent fit).
+- Score the realistic chance this candidate could credibly apply and interview, not how much they might learn on the job.
+- Be conservative when the CV suggests a very different seniority or domain than the role (for example, senior background applying to graduate or entry roles).
+- A high score requires strong overlap on core requirements, not just generic transferable skills.
+
+## Field expectations
+Return one JSON object with these fields:
+- company, role, location: inferred from the posting; use empty string or "unknown" when unclear
+- seniority: one of junior|mid|senior|lead|unknown
+- primary_domain: short label for the role's main field
+- fit_score: integer 1-10
+- fit_summary: at most 2 sentences; honest and specific
+- hard_requirements, strengths, gaps, mismatches: arrays of short, concrete strings; avoid duplicates across sections
+
+## Output rules
+- Reply with valid JSON only. No markdown fences, no commentary, no preamble, no explanation.
+- Respect any additional rules or output_format details in the user message; those override generic guidance when they conflict."""
 
 
 # ---------------------------------------------------------------------------
@@ -274,17 +300,19 @@ def call_ollama(config: dict, messages: list[dict[str, str]]) -> str:
     if not model:
         raise ValueError("config.yaml: ollama.model is required.")
 
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": generation.get("temperature", 0.3),
-                "num_ctx": generation.get("context_window", 16384),
-            },
-        }
-    ).encode("utf-8")
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": generation.get("temperature", 0.3),
+            "num_ctx": generation.get("context_window", 16384),
+        },
+    }
+    if "think" in ollama:
+        payload["think"] = ollama["think"]
+
+    body = json.dumps(payload).encode("utf-8")
 
     request = urllib.request.Request(
         f"{base_url}/api/chat",
@@ -338,69 +366,31 @@ def build_cv_text(profile: dict) -> str:
 
 
 def _keyword_tokens(keyword: str) -> list[str]:
-    """Significant tokens; slash-compounds like tcp/ip stay as one unit."""
-    tokens: list[str] = []
-    for part in re.split(r"[\s,()]+", keyword.lower().strip()):
-        if not part or part in TOKEN_STOPWORDS:
-            continue
-        if len(part) == 1 and part != "s":
-            continue
-        tokens.append(part)
-    return tokens
+    """Tokens using the same rules as build_cv_vocabulary."""
+    return [
+        token
+        for token in re.split(r"[^a-z0-9+/]+", keyword.lower().strip())
+        if len(token) > 1
+    ]
 
 
 def _literal_in_cv(term: str, cv_text: str) -> bool:
     return bool(re.search(rf"\b{re.escape(term)}\b", cv_text, re.IGNORECASE))
 
 
-def _single_token_grounded(token: str, vocabulary: set[str], cv_text: str = "") -> bool:
+def _token_grounded(token: str, vocabulary: set[str], cv_text: str = "") -> bool:
     if token in vocabulary:
         return True
-
-    if token in LITERAL_ONLY_TERMS:
-        return bool(cv_text and _literal_in_cv(token, cv_text))
-
-    for skill, related in CV_SYNONYM_GROUPS.items():
-        if skill not in vocabulary:
-            continue
-        for term in related:
-            term_l = term.lower()
-            if token == term_l:
-                return True
-            if "/" in term_l:
-                for piece in term_l.split("/"):
-                    piece = piece.strip()
-                    if token == piece:
-                        return True
-    return False
-
-
-def _full_phrase_synonym_match(keyword: str, vocabulary: set[str]) -> bool:
-    if keyword in LITERAL_ONLY_TERMS:
-        return False
-    for skill, related in CV_SYNONYM_GROUPS.items():
-        if skill not in vocabulary:
-            continue
-        for term in related:
-            if keyword == term.lower():
-                return True
-    return False
+    return bool(cv_text and _literal_in_cv(token, cv_text))
 
 
 def is_keyword_grounded(keyword: str, vocabulary: set[str], cv_text: str = "") -> bool:
-    """True if keyword is supported by CV text or allowed synonym expansion."""
+    """True if keyword is supported by CV vocabulary or literal CV text."""
     kw = re.sub(r"\s+", " ", keyword.lower().strip())
     if not kw:
         return False
 
-    if cv_text:
-        if " " in kw:
-            if kw in cv_text:
-                return True
-        elif _literal_in_cv(kw, cv_text):
-            return True
-
-    if _full_phrase_synonym_match(kw, vocabulary):
+    if cv_text and kw in cv_text:
         return True
 
     tokens = _keyword_tokens(kw)
@@ -408,10 +398,9 @@ def is_keyword_grounded(keyword: str, vocabulary: set[str], cv_text: str = "") -
         return False
 
     if len(tokens) == 1:
-        return _single_token_grounded(tokens[0], vocabulary, cv_text)
+        return _token_grounded(tokens[0], vocabulary, cv_text)
 
-    # Multi-word phrases require every significant token to be grounded.
-    return all(_single_token_grounded(token, vocabulary, cv_text) for token in tokens)
+    return all(_token_grounded(token, vocabulary, cv_text) for token in tokens)
 
 
 def post_filter_bucket(
@@ -523,7 +512,7 @@ def loop1_review_application(
             "role": "job title",
             "location": "location if present",
             "seniority": "junior|mid|senior|lead|unknown",
-            "primary_domain": "short domain label e.g. cybersecurity, cloud",
+            "primary_domain": "short domain label for the role",
             "fit_score": "integer 1-10",
             "fit_summary": "2 sentences max, honest assessment",
             "hard_requirements": ["explicit must-have requirements from the job"],
@@ -573,46 +562,51 @@ LOOP2_SPECS: dict[str, dict[str, str]] = {
         "section": "skills",
         "resume_section": "Skills",
         "instruction": (
-            "Extract keywords and short skill phrases from the job description batch "
-            "for the resume Skills section. "
-            "Put CV-backed or synonym-inferable items in matched. "
-            "Put job requirements not evidenced in the CV in aspirational."
+            "Extract hard and soft skills, tools, methods, and competencies from this job batch "
+            "that belong in the Skills section. Prefer concrete, resume-ready terms over vague labels. "
+            "matched = skills, tools, or methods the candidate_cv clearly supports. "
+            "aspirational = skills the job requires or prefers that are not evidenced in candidate_cv."
         ),
     },
     "2.2": {
         "section": "experience",
         "resume_section": "Work Experience",
         "instruction": (
-            "Extract phrases for the Work Experience section. "
-            "matched = themes the candidate can honestly reflect from CV experience. "
-            "aspirational = job asks for it but CV does not show it yet."
+            "Extract responsibility themes, deliverables, and impact phrases from this job batch "
+            "that could shape Work Experience bullets. Focus on what the role does, not company perks. "
+            "matched = duties, outcomes, or domains the candidate has actually done per candidate_cv. "
+            "aspirational = experience types, scopes, or responsibilities the job wants but CV does not show."
         ),
     },
     "2.3": {
         "section": "summary",
         "resume_section": "Professional Summary",
         "instruction": (
-            "Extract phrases for the Professional Summary. "
-            "matched = role identity and value phrases grounded in the CV. "
-            "aspirational = desirable framing from the job not yet in the CV."
+            "Extract headline-style phrases for the Professional Summary: role identity, strengths, "
+            "and value propositions tied to this posting. Keep wording concise and credible. "
+            "matched = positioning the candidate can truthfully claim from candidate_cv. "
+            "aspirational = attractive job framing or seniority signals not yet supported by candidate_cv."
         ),
     },
     "2.4": {
         "section": "education",
         "resume_section": "Education",
         "instruction": (
-            "Extract education-related phrases. "
-            "matched = degrees, fields, or certs the candidate has or nearly has. "
-            "aspirational = requirements the candidate does not meet."
+            "Extract degree levels, fields of study, certifications, licenses, and formal training "
+            "mentioned in this job batch. Ignore unrelated school marketing text. "
+            "matched = qualifications the candidate holds, is completing, or closely aligns with in candidate_cv. "
+            "aspirational = required or preferred credentials absent from candidate_cv."
         ),
     },
     "2.5": {
         "section": "projects",
         "resume_section": "Projects",
         "instruction": (
-            "Extract project-related phrases. "
-            "matched = project themes supported by CV projects, achievements, or skills. "
-            "aspirational = job themes with no CV evidence."
+            "Extract project-worthy themes from this job batch: builds, initiatives, portfolios, "
+            "case studies, or hands-on work the role emphasizes. "
+            "matched = project types or outcomes the candidate can point to in candidate_cv projects, "
+            "achievements, or relevant experience. "
+            "aspirational = project themes the job highlights with no support in candidate_cv."
         ),
     },
 }
@@ -639,11 +633,10 @@ def loop2_extract_keywords(
         "rules": [
             f"Return at most {max_keywords} items per array (matched and aspirational).",
             'Return JSON object only: {"matched": ["..."], "aspirational": ["..."]}',
-            "matched = only CV-backed or reasonably inferable from candidate_cv.",
+            "matched = only items evidenced in candidate_cv.",
             "aspirational = job asks for it but candidate_cv does not support it.",
             "No duplicates. Keep items short (1-4 words each).",
             "Extract from the job batch, not from generic filler text.",
-            "Never put CTF, hackathons, SOC, etc. in matched unless evidenced in the CV.",
         ],
         "batch": {"index": batch.index, "total": batch.total, "text": batch.text},
         "job_context": {
@@ -794,7 +787,17 @@ def process_application(
     )
 
 
-def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
+def export_results(payload: dict[str, Any], path: Path = OUTPUT_PATH) -> Path:
+    """Write the full builder output to JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def run(config_path: Path = CONFIG_PATH, output_path: Path | None = OUTPUT_PATH) -> dict[str, Any]:
     config = load_config(config_path)
 
     apps_path = resolve_path(config, "applications", "json", "applications/local_applications.json")
@@ -828,7 +831,19 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
             "batches_processed": result.batches_processed,
         }
 
-    return results
+    payload = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "sources": {
+            "applications": str(apps_path),
+            "profile": str(profile_path),
+        },
+        "applications": results,
+    }
+
+    if output_path is not None:
+        export_results(payload, output_path)
+
+    return payload
 
 
 def main() -> None:
@@ -836,12 +851,13 @@ def main() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
 
     try:
-        results = run()
+        payload = run()
     except (FileNotFoundError, ValueError, RuntimeError, ImportError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    print(json.dumps(results, indent=2, ensure_ascii=False))
+    count = len(payload.get("applications", {}))
+    print(f"Exported {count} application(s) -> {OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
