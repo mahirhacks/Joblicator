@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Joblication — New Application</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <h1>Joblication</h1>
+      <p class="subtitle">Paste a job posting — it gets saved to <code>applications.txt</code></p>
+    </header>
+
+    <form id="job-form" class="form" novalidate>
+      <div class="field">
+        <label for="company">Company Name</label>
+        <input type="text" id="company" name="company" placeholder="e.g. NVIDIA Malaysia" required>
+      </div>
+
+      <div class="field">
+        <label for="title">Job Title</label>
+        <input type="text" id="title" name="title" placeholder="e.g. Cloud Architect" required>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="location">Location</label>
+          <input type="text" id="location" name="location" placeholder="e.g. Kuala Lumpur, Malaysia">
+        </div>
+
+        <div class="field">
+          <label for="url">Job URL</label>
+          <input type="url" id="url" name="url" placeholder="https://...">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="about">About</label>
+        <textarea id="about" name="about" rows="6" placeholder="Company or role overview…"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="description">Description</label>
+        <textarea id="description" name="description" rows="10" placeholder="Requirements, responsibilities, qualifications…" required></textarea>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary" id="submit-btn">Save to applications.txt</button>
+        <button type="reset" class="btn btn-ghost">Clear</button>
+      </div>
+    </form>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

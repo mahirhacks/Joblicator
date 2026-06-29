@@ -7,10 +7,12 @@ Input format (one or more blocks):
     [start]
     [Company Name] : NVIDIA Malaysia
     [Title] : Cloud Architect
-    [URL] : https://example.com/job
     [Location] : Kuala Lumpur, Malaysia
-
-    Whatever the user drops...
+    [URL] : https://example.com/job
+    [About] :
+    Company overview text...
+    [Description] :
+    Requirements and responsibilities...
     [end]
 
 Run: python applications/extractor.py
@@ -33,8 +35,13 @@ BLOCK_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-HEADER_RE = re.compile(
-    r"^\[(Company Name|Title|URL|Location)\]\s*:\s*(.+)$",
+INLINE_HEADER_RE = re.compile(
+    r"^\[(Company Name|Title|URL|Location)\]\s*:\s*(.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+SECTION_HEADER_RE = re.compile(
+    r"^\[(About|Description)\]\s*:\s*(.*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -52,7 +59,7 @@ NUMBER_RE = re.compile(r"^(\d{1,2})[\.\)]\s+(.+)$")
 
 BULLET_RE = re.compile(r"^[-•*–—]\s+(.+)$")
 
-SECTION_HEADER_RE = re.compile(r"^(.{2,120}?):\s*$")
+SECTION_HEADER_RE_INLINE = re.compile(r"^(.{2,120}?):\s*$")
 
 
 @dataclass
@@ -61,21 +68,55 @@ class RawApplication:
     title: str
     url: str
     location: str
-    body: str
+    about: str
+    description: str
+
+
+def _section_content(block: str, section: str, stop_section: str | None = None) -> str:
+    start_re = re.compile(rf"^\[{section}\]\s*:\s*(.*)$", re.IGNORECASE | re.MULTILINE)
+    match = start_re.search(block)
+    if not match:
+        return ""
+
+    same_line = match.group(1).strip()
+    remainder = block[match.end() :].lstrip("\n")
+
+    if stop_section:
+        stop_re = re.compile(rf"^\[{stop_section}\]\s*:", re.IGNORECASE | re.MULTILINE)
+        stop_match = stop_re.search(remainder)
+        if stop_match:
+            remainder = remainder[: stop_match.start()]
+
+    parts = [part for part in (same_line, remainder.strip()) if part]
+    return "\n".join(parts).strip()
+
+
+def _legacy_body(block: str) -> str:
+    """Free-form body for older blocks without [About]/[Description]."""
+    body = INLINE_HEADER_RE.sub("", block)
+    body = SECTION_HEADER_RE.sub("", body)
+    return body.strip()
 
 
 def parse_blocks(text: str) -> list[RawApplication]:
     apps: list[RawApplication] = []
     for block in BLOCK_RE.findall(text):
-        headers = {k.lower(): v.strip() for k, v in HEADER_RE.findall(block)}
-        body = HEADER_RE.sub("", block).strip()
+        headers = {k.lower(): v.strip() for k, v in INLINE_HEADER_RE.findall(block)}
+        about = _section_content(block, "About", stop_section="Description")
+        description = _section_content(block, "Description")
+
+        if not about and not description:
+            legacy = _legacy_body(block)
+            description = legacy
+
         apps.append(
             RawApplication(
                 company=headers.get("company name", ""),
                 title=headers.get("title", ""),
                 url=headers.get("url", ""),
                 location=headers.get("location", ""),
-                body=body,
+                about=about,
+                description=description,
             )
         )
     return apps
@@ -158,7 +199,7 @@ def _is_section_header(line: str) -> str | None:
     stripped = line.strip()
     if not stripped.endswith(":"):
         return None
-    if SECTION_HEADER_RE.match(stripped):
+    if SECTION_HEADER_RE_INLINE.match(stripped):
         return stripped[:-1].strip()
     return None
 
@@ -246,34 +287,22 @@ def format_body(body: str) -> str:
     return " ".join(part for part in output if part)
 
 
-def extract_description(body: str) -> str:
-    """First sentence or paragraph for the short description field."""
-    paragraph = re.split(r"\n\s*\n", body, maxsplit=1)[0].strip()
-    paragraph = re.sub(r"\s+", " ", paragraph)
-    if len(paragraph) <= 320:
-        return paragraph
-    cut = paragraph[:320]
-    if " " in cut:
-        cut = cut.rsplit(" ", 1)[0]
-    return cut + "..."
-
-
 def to_record(app: RawApplication) -> dict[str, str] | None:
     if _is_placeholder(app.company) and _is_placeholder(app.title):
         return None
-    if not app.body and _is_placeholder(app.company):
-        return None
 
-    cleaned_body = format_body(sanitize_text(app.body))
-    if not cleaned_body and _is_placeholder(app.company):
+    cleaned_about = format_body(sanitize_text(app.about)) if app.about else ""
+    cleaned_description = format_body(sanitize_text(app.description)) if app.description else ""
+
+    if not cleaned_about and not cleaned_description and _is_placeholder(app.company):
         return None
 
     return {
         "url": "" if _is_placeholder(app.url) else app.url.strip(),
-        "description": extract_description(cleaned_body),
         "location": "" if _is_placeholder(app.location) else app.location.strip(),
         "title": "" if _is_placeholder(app.title) else app.title.strip(),
-        "requirements": cleaned_body,
+        "about": cleaned_about,
+        "description": cleaned_description,
     }
 
 
