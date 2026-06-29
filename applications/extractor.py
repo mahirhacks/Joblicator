@@ -1,21 +1,10 @@
 """
-Read messy job postings from applications.txt, sanitize and structure them,
-then write applications.json.
+Sanitize and structure job applications into local_applications.json.
 
-Input format (one or more blocks):
+The UI posts structured fields; this module cleans them and appends to JSON.
+Legacy bulk import from a [start]...[end] text file is still supported via --txt.
 
-    [start]
-    [Company Name] : NVIDIA Malaysia
-    [Title] : Cloud Architect
-    [Location] : Kuala Lumpur, Malaysia
-    [URL] : https://example.com/job
-    [About] :
-    Company overview text...
-    [Description] :
-    Requirements and responsibilities...
-    [end]
-
-Run: python applications/extractor.py
+Run: python applications/extractor.py --txt path/to/file.txt
 """
 
 from __future__ import annotations
@@ -27,8 +16,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parent
-TXT_PATH = DIR / "applications.txt"
-JSON_PATH = DIR / "applications.json"
+
+import sys
+
+if str(DIR.parent) not in sys.path:
+    sys.path.insert(0, str(DIR.parent))
+
+from applications.storage import load_json_path
+
+JSON_PATH = load_json_path()
 
 BLOCK_RE = re.compile(
     r"\[start\]\s*(.*?)\s*\[end\]",
@@ -36,12 +32,12 @@ BLOCK_RE = re.compile(
 )
 
 INLINE_HEADER_RE = re.compile(
-    r"^\[(Company Name|Title|URL|Location)\]\s*:\s*(.*)$",
+    r"^\[(Company Name|Title|URL|Location)\]\s*:\s*([^\r\n]*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 SECTION_HEADER_RE = re.compile(
-    r"^\[(About|Description)\]\s*:\s*(.*)$",
+    r"^\[(About|Description)\]\s*:\s*([^\r\n]*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -135,6 +131,24 @@ def slugify(company: str, title: str = "") -> str:
     if not slug and title:
         slug = re.sub(r"[^a-z0-9]+", "_", title.strip().lower()).strip("_")
     return slug or "unknown_company"
+
+
+def unique_key(key: str, existing: dict) -> str:
+    if key not in existing:
+        return key
+    suffix = 2
+    while f"{key}_{suffix}" in existing:
+        suffix += 1
+    return f"{key}_{suffix}"
+
+
+def load_json(json_path: Path = JSON_PATH) -> dict[str, dict[str, str]]:
+    if not json_path.exists():
+        return {}
+    content = json_path.read_text(encoding="utf-8").strip()
+    if not content:
+        return {}
+    return json.loads(content)
 
 
 def sanitize_quotes(text: str) -> str:
@@ -306,23 +320,58 @@ def to_record(app: RawApplication) -> dict[str, str] | None:
     }
 
 
-def extract(text: str | None = None) -> dict[str, dict[str, str]]:
-    source = text if text is not None else TXT_PATH.read_text(encoding="utf-8")
+def record_from_fields(
+    company: str,
+    title: str,
+    about: str = "",
+    description: str = "",
+    location: str = "",
+    url: str = "",
+) -> dict[str, str] | None:
+    return to_record(
+        RawApplication(
+            company=company,
+            title=title,
+            url=url,
+            location=location,
+            about=about,
+            description=description,
+        )
+    )
+
+
+def extract(text: str) -> dict[str, dict[str, str]]:
     records: dict[str, dict[str, str]] = {}
 
-    for app in parse_blocks(source):
+    for app in parse_blocks(text):
         record = to_record(app)
         if record is None:
             continue
-        key = slugify(app.company, app.title)
-        if key in records:
-            suffix = 2
-            while f"{key}_{suffix}" in records:
-                suffix += 1
-            key = f"{key}_{suffix}"
+        key = unique_key(slugify(app.company, app.title), records)
         records[key] = record
 
     return records
+
+
+def append_application(
+    company: str,
+    title: str,
+    about: str = "",
+    description: str = "",
+    location: str = "",
+    url: str = "",
+    json_path: Path = JSON_PATH,
+) -> tuple[str, int]:
+    """Sanitize one application and append it to the JSON store."""
+    record = record_from_fields(company, title, about, description, location, url)
+    if record is None:
+        raise ValueError("Invalid application data.")
+
+    records = load_json(json_path)
+    key = unique_key(slugify(company, title), records)
+    records[key] = record
+    write_json(records, json_path)
+    return key, len(records)
 
 
 def write_json(records: dict[str, dict[str, str]], path: Path = JSON_PATH) -> None:
@@ -332,17 +381,42 @@ def write_json(records: dict[str, dict[str, str]], path: Path = JSON_PATH) -> No
     )
 
 
-def main() -> None:
-    if not TXT_PATH.exists():
-        raise FileNotFoundError(f"Missing input file: {TXT_PATH}")
+def import_txt(txt_path: Path, json_path: Path = JSON_PATH) -> int:
+    """Parse a legacy text file and replace json_path with extracted records."""
+    if not txt_path.exists():
+        raise FileNotFoundError(f"Missing input file: {txt_path}")
 
-    records = extract()
+    records = extract(txt_path.read_text(encoding="utf-8"))
     if not records:
-        print(f"No valid [start]...[end] blocks found in {TXT_PATH}; JSON not changed.")
+        return 0
+
+    write_json(records, json_path)
+    return len(records)
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Extract job applications to JSON.")
+    parser.add_argument(
+        "--txt",
+        type=Path,
+        required=True,
+        help="Legacy [start]...[end] text file to import",
+    )
+    parser.add_argument("--json", type=Path, default=JSON_PATH, help="Output JSON file")
+    args = parser.parse_args()
+
+    try:
+        count = import_txt(args.txt, args.json)
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    if count == 0:
+        print(f"No valid [start]...[end] blocks found in {args.txt}; JSON not changed.")
         return
 
-    write_json(records)
-    print(f"Wrote {len(records)} application(s) to {JSON_PATH}")
+    print(f"Wrote {count} application(s) to {args.json}")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,20 @@
 const form = document.getElementById("job-form");
 const submitBtn = document.getElementById("submit-btn");
 const toast = document.getElementById("toast");
+const storageHint = document.getElementById("storage-hint");
 
 let toastTimer = null;
+
+async function loadStorageHint() {
+  try {
+    const response = await fetch("/api/config");
+    const data = await response.json();
+    storageHint.innerHTML =
+      `Paste a job posting — it gets saved directly to <code>${data.json}</code>`;
+  } catch {
+    storageHint.textContent = "Could not load storage config from server.";
+  }
+}
 
 function showToast(message, type = "success") {
   clearTimeout(toastTimer);
@@ -52,12 +64,18 @@ form.addEventListener("submit", async (event) => {
       throw new Error(data.error || "Failed to save application.");
     }
 
-    showToast(`Saved ${company.trim()} — ${title.trim()}`);
+    showToast(
+      data.json_count
+        ? `Saved ${company.trim()} — ${title.trim()} (${data.json_count} in ${data.json})`
+        : `Saved ${company.trim()} — ${title.trim()}`
+    );
     form.reset();
   } catch (err) {
     showToast(err.message || "Could not reach the server.", "error");
   } finally {
     submitBtn.disabled = false;
-    submitBtn.textContent = "Save to applications.txt";
+    submitBtn.textContent = "Save application";
   }
 });
+
+loadStorageHint();

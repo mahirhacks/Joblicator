@@ -1,7 +1,8 @@
 """
 Local UI server for Joblication.
 
-Serves ui/ static files and appends job postings to applications/applications.txt.
+Serves ui/ static files and saves job postings directly to
+applications/local_applications.json via applications/extractor.py.
 
 Run from project root:
     python ui/server.py
@@ -13,55 +14,44 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 UI_DIR = Path(__file__).resolve().parent
-TXT_PATH = ROOT / "applications" / "applications.txt"
 
 HOST = "127.0.0.1"
 PORT = 8080
 
 
-def format_block(
+def get_json_path() -> Path:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+    from applications.storage import load_json_path
+
+    return load_json_path()
+
+
+def save_application(
     company: str,
     title: str,
     about: str = "",
     description: str = "",
     location: str = "",
     url: str = "",
-) -> str:
-    lines = [
-        "[start]",
-        f"[Company Name] : {company.strip()}",
-        f"[Title] : {title.strip()}",
-        f"[Location] : {location.strip()}",
-        f"[URL] : {url.strip()}",
-        "[About] :",
-        about.strip(),
-        "[Description] :",
-        description.strip(),
-        "[end]",
-        "",
-    ]
-    return "\n".join(lines)
+) -> tuple[str, int]:
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
 
+    from applications.extractor import append_application
 
-def append_application(
-    company: str,
-    title: str,
-    about: str = "",
-    description: str = "",
-    location: str = "",
-    url: str = "",
-) -> None:
-    TXT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    block = format_block(company, title, about, description, location, url)
-    with TXT_PATH.open("a", encoding="utf-8") as f:
-        if TXT_PATH.stat().st_size > 0:
-            f.write("\n")
-        f.write(block)
+    json_path = get_json_path()
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    return append_application(
+        company, title, about, description, location, url, json_path
+    )
 
 
 class JoblicationHandler(BaseHTTPRequestHandler):
@@ -100,11 +90,22 @@ class JoblicationHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(data)
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path == "/api/config":
+            json_path = get_json_path()
+            self._send_json(
+                200,
+                {
+                    "json": json_path.name,
+                    "json_path": str(json_path),
+                },
+            )
+            return
         if path in ("/", "/index.html"):
             self._serve_static("index.html")
             return
@@ -143,18 +144,34 @@ class JoblicationHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            append_application(company, title, about, description, location, url)
+            slug, json_count = save_application(
+                company, title, about, description, location, url
+            )
+            json_path = get_json_path()
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
         except OSError as exc:
             self._send_json(500, {"error": f"Could not write file: {exc}"})
             return
 
-        self._send_json(200, {"ok": True, "message": "Application saved."})
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "message": "Application saved.",
+                "slug": slug,
+                "json_count": json_count,
+                "json": json_path.name,
+            },
+        )
 
 
 def main() -> None:
+    json_path = get_json_path()
     server = HTTPServer((HOST, PORT), JoblicationHandler)
     print(f"Joblication UI -> http://{HOST}:{PORT}")
-    print(f"Writing to -> {TXT_PATH}")
+    print(f"Writing to -> {json_path}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
