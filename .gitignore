@@ -1,0 +1,12 @@
+applications/local_applications.json
+engine/dynamic_engine/data/*
+
+settings/local_profile.json
+settings/local_scanner.json
+settings/local_template.json
+
+ui/frontend/dist/*
+ui/frontend/node_modules/*
+ui/frontend/package-lock.json
+
+.cursor/*
