@@ -26,5 +26,6 @@ stages:
   stage1_cv: engine/dynamic_engine/1_stage_req_cv.json
   stage1_letter: engine/dynamic_engine/1_stage_req_letter.json
   stage2_cv: engine/dynamic_engine/2_stage_cv.json
+  stage2_cv_p1: engine/dynamic_engine/2_stage_cv_p1.json
   stage3_letter: engine/dynamic_engine/3_stage_letter.json
   letter_body_paragraphs: 3

@@ -1,13 +1,11 @@
 """
-Stage 2 — tailored resume content (one LLM loop per field / collection item).
-
-Reads stage 1 CV requirements and the candidate profile; processes applications one by one.
-cv_source in evidence_map is static (from stage 1); proof_points and resume_angle use the LLM.
+PURPOSE: Collect all the information about the application and store it in a structured format json file.
 
 Run from project root:
     python engine/dynamic_engine/2_stage.py
 
-Output: engine/dynamic_engine/2_stage_cv.json
+Outputs:
+    engine/dynamic_engine/data/stage_2.json
 """
 
 from __future__ import annotations
@@ -20,6 +18,10 @@ from typing import Any
 from _stage_common import (
     CONFIG_PATH,
     call_ollama,
+    coerce_llm_bullets,
+    coerce_llm_dict_map,
+    coerce_llm_string,
+    coerce_llm_string_list,
     ensure_project_path,
     export_json,
     load_config,
@@ -40,9 +42,123 @@ STAGE2_SYSTEM = """You are an expert resume writer. Draft honest, ATS-friendly r
 - Reply with valid JSON only. No markdown fences or commentary.
 - Respect the exact output shape requested in the user message."""
 
+RAW_LOG_MAX_CHARS = 500
+
 
 def _messages(system: str, user: str) -> list[dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _log_progress(slug: str, loop: str, source_id: str = "") -> None:
+    label = f"{loop} {source_id}".strip()
+    print(f"Stage 2 — {slug}: {label} ...", file=sys.stderr)
+
+
+def _log_llm_issue(
+    slug: str,
+    loop: str,
+    reason: str,
+    raw: str = "",
+    *,
+    source_id: str = "",
+    exc: Exception | None = None,
+) -> None:
+    label = f"{loop} [{source_id}]" if source_id else loop
+    message = f"Stage 2 FAILED {slug} — {label}: {reason}"
+    if exc is not None:
+        message = f"{message} ({exc})"
+    print(message, file=sys.stderr)
+    if raw:
+        snippet = raw if len(raw) <= RAW_LOG_MAX_CHARS else raw[:RAW_LOG_MAX_CHARS] + "..."
+        print(f"RAW OUTPUT:\n{snippet}\n---", file=sys.stderr)
+
+
+def _parse_bullets(raw: str, slug: str, loop: str, source_id: str = "") -> list[str]:
+    try:
+        parsed = parse_llm_json(raw)
+        bullets = coerce_llm_bullets(parsed)
+        if not bullets:
+            _log_llm_issue(
+                slug,
+                loop,
+                "parsed OK but bullets empty",
+                raw,
+                source_id=source_id,
+            )
+        return bullets
+    except (json.JSONDecodeError, ValueError) as exc:
+        _log_llm_issue(slug, loop, "JSON parse failed", raw, source_id=source_id, exc=exc)
+        return []
+
+
+def _parse_string(raw: str, slug: str, loop: str, key: str) -> str:
+    try:
+        parsed = parse_llm_json(raw)
+        if isinstance(parsed, list):
+            value = " ".join(str(item).strip() for item in parsed if str(item).strip())
+        elif isinstance(parsed, dict):
+            field = parsed.get(key, "")
+            if isinstance(field, list):
+                value = " ".join(str(item).strip() for item in field if str(item).strip())
+            else:
+                value = coerce_llm_string(parsed, key)
+        else:
+            value = str(parsed).strip()
+        if not value:
+            _log_llm_issue(slug, loop, f"parsed OK but {key} empty", raw)
+        return value
+    except (json.JSONDecodeError, ValueError) as exc:
+        _log_llm_issue(slug, loop, "JSON parse failed", raw, exc=exc)
+        return raw.strip()
+
+
+def _parse_string_list(raw: str, slug: str, loop: str, key: str) -> list[str]:
+    try:
+        items = coerce_llm_string_list(parse_llm_json(raw), key)
+        if not items:
+            _log_llm_issue(slug, loop, f"parsed OK but {key} empty", raw)
+        return items
+    except (json.JSONDecodeError, ValueError) as exc:
+        _log_llm_issue(slug, loop, "JSON parse failed", raw, exc=exc)
+        return []
+
+
+def _parse_dict_map(raw: str, slug: str, loop: str, key: str) -> dict[str, list[str]]:
+    try:
+        grouped = coerce_llm_dict_map(parse_llm_json(raw), key)
+        if not grouped:
+            _log_llm_issue(slug, loop, f"parsed OK but {key} empty", raw)
+        return grouped
+    except (json.JSONDecodeError, ValueError) as exc:
+        _log_llm_issue(slug, loop, "JSON parse failed", raw, exc=exc)
+        return {}
+
+
+def _parse_evidence_entry(raw: str, slug: str, requirement: str) -> tuple[list[str], str]:
+    loop = "evidence_map"
+    try:
+        parsed = parse_llm_json(raw)
+        proof_points = coerce_llm_string_list(parsed, "proof_points")
+        resume_angle = coerce_llm_string(parsed, "resume_angle")
+        if not proof_points and not resume_angle:
+            _log_llm_issue(
+                slug,
+                loop,
+                "parsed OK but proof_points and resume_angle empty",
+                raw,
+                source_id=requirement[:60],
+            )
+        return proof_points, resume_angle
+    except (json.JSONDecodeError, ValueError) as exc:
+        _log_llm_issue(
+            slug,
+            loop,
+            "JSON parse failed",
+            raw,
+            source_id=requirement[:60],
+            exc=exc,
+        )
+        return [], ""
 
 
 def generate_evidence_entry(
@@ -76,6 +192,8 @@ def generate_evidence_entry(
         },
     }
 
+    _log_progress(slug, "evidence_map", entry.get("job_requirement", "")[:40])
+
     raw = call_ollama(
         config,
         _messages(
@@ -87,16 +205,15 @@ def generate_evidence_entry(
             ),
         ),
     )
-    try:
-        parsed = parse_llm_json(raw)
-    except (json.JSONDecodeError, ValueError):
-        parsed = {}
+    proof_points, resume_angle = _parse_evidence_entry(
+        raw, slug, entry.get("job_requirement", "")
+    )
 
     return {
         "job_requirement": entry.get("job_requirement", ""),
         "cv_source": cv_source,
-        "proof_points": parsed.get("proof_points", []),
-        "resume_angle": parsed.get("resume_angle", ""),
+        "proof_points": proof_points,
+        "resume_angle": resume_angle,
     }
 
 
@@ -118,6 +235,8 @@ def generate_professional_summary(
         "output_format": {"professional_summary": "3-4 sentences"},
     }
 
+    _log_progress(slug, "professional_summary")
+
     raw = call_ollama(
         config,
         _messages(
@@ -125,10 +244,7 @@ def generate_professional_summary(
             f"Stage 2 — professional_summary for {slug}.\n{json.dumps(prompt, indent=2, ensure_ascii=False)}",
         ),
     )
-    try:
-        return str(parse_llm_json(raw).get("professional_summary", "")).strip()
-    except (json.JSONDecodeError, ValueError):
-        return raw.strip()
+    return _parse_string(raw, slug, "professional_summary", "professional_summary")
 
 
 def generate_education_line(
@@ -144,6 +260,8 @@ def generate_education_line(
         "output_format": {"education_line": "single line string"},
     }
 
+    _log_progress(slug, "education_line")
+
     raw = call_ollama(
         config,
         _messages(
@@ -151,10 +269,7 @@ def generate_education_line(
             f"Stage 2 — education_line for {slug}.\n{json.dumps(prompt, indent=2, ensure_ascii=False)}",
         ),
     )
-    try:
-        return str(parse_llm_json(raw).get("education_line", "")).strip()
-    except (json.JSONDecodeError, ValueError):
-        return raw.strip()
+    return _parse_string(raw, slug, "education_line", "education_line")
 
 
 def generate_certifications_highlight(
@@ -170,6 +285,8 @@ def generate_certifications_highlight(
         "output_format": {"certifications_highlight": ["cert name — issuer or context"]},
     }
 
+    _log_progress(slug, "certifications_highlight")
+
     raw = call_ollama(
         config,
         _messages(
@@ -177,11 +294,7 @@ def generate_certifications_highlight(
             f"Stage 2 — certifications_highlight for {slug}.\n{json.dumps(prompt, indent=2, ensure_ascii=False)}",
         ),
     )
-    try:
-        items = parse_llm_json(raw).get("certifications_highlight", [])
-        return [str(i).strip() for i in items if str(i).strip()]
-    except (json.JSONDecodeError, ValueError):
-        return []
+    return _parse_string_list(raw, slug, "certifications_highlight", "certifications_highlight")
 
 
 def generate_skills_grouped(
@@ -208,6 +321,8 @@ def generate_skills_grouped(
         },
     }
 
+    _log_progress(slug, "skills_grouped")
+
     raw = call_ollama(
         config,
         _messages(
@@ -215,17 +330,7 @@ def generate_skills_grouped(
             f"Stage 2 — skills_grouped for {slug}.\n{json.dumps(prompt, indent=2, ensure_ascii=False)}",
         ),
     )
-    try:
-        grouped = parse_llm_json(raw).get("skills_grouped", {})
-        if isinstance(grouped, dict):
-            return {
-                str(k): [str(v).strip() for v in vals if str(v).strip()]
-                for k, vals in grouped.items()
-                if isinstance(vals, list)
-            }
-    except (json.JSONDecodeError, ValueError):
-        pass
-    return {}
+    return _parse_dict_map(raw, slug, "skills_grouped", "skills_grouped")
 
 
 def generate_experience_bullets(
@@ -249,6 +354,8 @@ def generate_experience_bullets(
         "output_format": {"bullets": ["bullet strings"]},
     }
 
+    _log_progress(slug, "experience_bullets", source_id)
+
     raw = call_ollama(
         config,
         _messages(
@@ -257,11 +364,7 @@ def generate_experience_bullets(
             f"{json.dumps(prompt, indent=2, ensure_ascii=False)}",
         ),
     )
-    try:
-        bullets = parse_llm_json(raw).get("bullets", [])
-        bullet_list = [str(b).strip() for b in bullets if str(b).strip()]
-    except (json.JSONDecodeError, ValueError):
-        bullet_list = []
+    bullet_list = _parse_bullets(raw, slug, "experience_bullets", source_id)
 
     return {
         "source_id": source_id,
@@ -290,6 +393,8 @@ def generate_project_bullets(
         "output_format": {"bullets": ["bullet strings"]},
     }
 
+    _log_progress(slug, "project_bullets", source_id)
+
     raw = call_ollama(
         config,
         _messages(
@@ -298,11 +403,7 @@ def generate_project_bullets(
             f"{json.dumps(prompt, indent=2, ensure_ascii=False)}",
         ),
     )
-    try:
-        bullets = parse_llm_json(raw).get("bullets", [])
-        bullet_list = [str(b).strip() for b in bullets if str(b).strip()]
-    except (json.JSONDecodeError, ValueError):
-        bullet_list = []
+    bullet_list = _parse_bullets(raw, slug, "project_bullets", source_id)
 
     return {
         "source_id": source_id,

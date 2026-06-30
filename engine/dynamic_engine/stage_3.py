@@ -1,13 +1,11 @@
 """
-Stage 3 — cover letter / job letter content (one LLM loop per field).
-
-Reads stage 1 letter brief and stage 2 resume draft for context.
-Processes applications one by one with separate loops per letter section.
+PURPOSE: Collect all the information about the application and store it in a structured format json file.
 
 Run from project root:
     python engine/dynamic_engine/3_stage.py
 
-Output: engine/dynamic_engine/3_stage_letter.json
+Outputs:
+    engine/dynamic_engine/data/stage_3.json
 """
 
 from __future__ import annotations
@@ -20,6 +18,8 @@ from typing import Any
 from _stage_common import (
     CONFIG_PATH,
     call_ollama,
+    coerce_llm_string,
+    coerce_llm_string_list,
     ensure_project_path,
     export_json,
     load_config,
@@ -90,7 +90,7 @@ def generate_opening_hook(
         ),
     )
     try:
-        return str(parse_llm_json(raw).get("opening_hook", "")).strip()
+        return coerce_llm_string(parse_llm_json(raw), "opening_hook")
     except (json.JSONDecodeError, ValueError):
         return raw.strip()
 
@@ -130,7 +130,7 @@ def generate_body_paragraph(
         ),
     )
     try:
-        return str(parse_llm_json(raw).get("body_paragraph", "")).strip()
+        return coerce_llm_string(parse_llm_json(raw), "body_paragraph")
     except (json.JSONDecodeError, ValueError):
         return raw.strip()
 
@@ -162,7 +162,7 @@ def generate_closing(
         ),
     )
     try:
-        return str(parse_llm_json(raw).get("closing", "")).strip()
+        return coerce_llm_string(parse_llm_json(raw), "closing")
     except (json.JSONDecodeError, ValueError):
         return raw.strip()
 
@@ -193,8 +193,7 @@ def generate_gaps_to_address(
         ),
     )
     try:
-        items = parse_llm_json(raw).get("gaps_to_address_honestly", [])
-        return [str(i).strip() for i in items if str(i).strip()]
+        return coerce_llm_string_list(parse_llm_json(raw), "gaps_to_address_honestly")
     except (json.JSONDecodeError, ValueError):
         return []
 
@@ -220,7 +219,7 @@ def generate_tone_notes(
         ),
     )
     try:
-        return str(parse_llm_json(raw).get("tone_notes", "")).strip()
+        return coerce_llm_string(parse_llm_json(raw), "tone_notes")
     except (json.JSONDecodeError, ValueError):
         return raw.strip()
 

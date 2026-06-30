@@ -1,15 +1,11 @@
 """
-Stage 1 — job requirement analysis, fit review, keyword extraction, evidence map skeleton.
-
-Loop 1  : Per application — job_brief + honest fit review.
-Loop 2  : Per application — sequential inter-batch keyword picks per resume section.
+PURPOSE: Collect all the information about the application and store it in a structured format json file.
 
 Run from project root:
     python engine/dynamic_engine/1_stage.py
 
 Outputs:
-    engine/dynamic_engine/1_stage_req_cv.json
-    engine/dynamic_engine/1_stage_req_letter.json
+    engine/dynamic_engine/data/stage_1.json
 """
 
 from __future__ import annotations

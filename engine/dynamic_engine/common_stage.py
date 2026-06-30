@@ -278,6 +278,50 @@ def parse_llm_json(raw: str) -> Any:
         raise
 
 
+def coerce_llm_string(parsed: Any, key: str) -> str:
+    """Extract a string field; accept bare string when the model skips the wrapper object."""
+    if isinstance(parsed, str):
+        return parsed.strip()
+    if isinstance(parsed, dict):
+        return str(parsed.get(key, "")).strip()
+    return ""
+
+
+def coerce_llm_string_list(parsed: Any, key: str) -> list[str]:
+    """Extract a string list; accept a bare JSON array when the model skips the wrapper object."""
+    if isinstance(parsed, list):
+        return _coerce_str_list(parsed)
+    if isinstance(parsed, dict):
+        items = parsed.get(key, parsed.get("items", parsed.get("matched", [])))
+        if isinstance(items, list):
+            return _coerce_str_list(items)
+    return []
+
+
+def coerce_llm_bullets(parsed: Any) -> list[str]:
+    """Extract resume bullets from object or bare array responses."""
+    return coerce_llm_string_list(parsed, "bullets")
+
+
+def coerce_llm_dict_map(parsed: Any, key: str) -> dict[str, list[str]]:
+    """Extract a dict-of-lists field; accept the map as the top-level object."""
+    raw: Any = {}
+    if isinstance(parsed, dict):
+        if key in parsed and isinstance(parsed[key], dict):
+            raw = parsed[key]
+        elif parsed and all(isinstance(v, list) for v in parsed.values()):
+            raw = parsed
+
+    if not isinstance(raw, dict):
+        return {}
+
+    return {
+        str(name): _coerce_str_list(vals)
+        for name, vals in raw.items()
+        if isinstance(vals, list)
+    }
+
+
 def parse_keyword_list(raw: str) -> list[str]:
     parsed = parse_llm_json(raw)
     if isinstance(parsed, dict):
