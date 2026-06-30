@@ -13,10 +13,18 @@ applications:
   json: applications/local_applications.json
 
 profile:
-  json: settings/profile.json
+  json: settings/local_profile.json
 
 batching:
   max_chars: 1200
 
 loops:
-  max_keywords_per_batch: 8
+  max_keywords_per_section: 20
+  max_keywords_per_inter_batch: 5
+
+stages:
+  stage1_cv: engine/dynamic_engine/1_stage_req_cv.json
+  stage1_letter: engine/dynamic_engine/1_stage_req_letter.json
+  stage2_cv: engine/dynamic_engine/2_stage_cv.json
+  stage3_letter: engine/dynamic_engine/3_stage_letter.json
+  letter_body_paragraphs: 3
