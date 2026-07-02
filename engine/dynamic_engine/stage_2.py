@@ -43,7 +43,20 @@ from ollama import (
     coerce_llm_dict_map,
     coerce_llm_string,
     coerce_llm_string_list,
-    parse_llm_json,
+)
+from plain_text import (
+    PLAIN_TEXT_REPLY,
+    clean_raw,
+    parse_achievement_entry,
+    parse_certifications,
+    parse_comma_list,
+    parse_fit_review,
+    parse_plain_paragraph,
+    parse_project_entry,
+    parse_quality_review,
+    parse_skills_domains,
+    parse_volunteer,
+    parse_work_experience_entry,
 )
 from prompts.prompt_stage_2 import (
     INTERLOOP_SYSTEMS,
@@ -65,7 +78,9 @@ from prompts.prompt_stage_2 import (
 from utils import (
     CONFIG_PATH,
     application_text,
+    build_parser_improvement_block,
     build_payload_header,
+    build_quality_improvement_block,
     build_sources,
     dedupe_keywords,
     ensure_project_path,
@@ -73,6 +88,8 @@ from utils import (
     load_config,
     load_json,
     profile_for_prompt,
+    record_parser_issues,
+    record_reviewer_feedback,
     resolve_output_path,
     resolve_path,
 )
@@ -444,17 +461,6 @@ def _verification_settings(config: dict) -> dict[str, Any]:
     return config.get("stage_2", {}).get("verification", {})
 
 
-def _improvement_block(section: str, prior_draft: Any, feedback: str) -> dict[str, Any]:
-    return {
-        "prior_draft": prior_draft,
-        "reviewer_feedback": feedback,
-        "instruction": (
-            f"Rewrite the {section} section addressing reviewer_feedback. "
-            "Keep only facts from candidate_cv. Do not invent employers, tools, or outcomes."
-        ),
-    }
-
-
 def _messages(system: str, user: str) -> list[dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -590,26 +596,19 @@ def _call_loop(
             (
                 f"Stage 2 {loop_name} for {app_key}.\n"
                 f"{json.dumps(prompt, indent=2, ensure_ascii=False)}\n\n"
-                "Return JSON only."
+                f"{PLAIN_TEXT_REPLY}"
             ),
         ),
     )
 
 
 def _parse_fit_review(raw: str) -> dict[str, Any]:
-    parsed = parse_llm_json(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("fit_review response is not a JSON object")
-    score = parsed.get("fit_score", 0)
-    try:
-        fit_score = int(score)
-    except (TypeError, ValueError):
-        fit_score = 0
+    parsed = parse_fit_review(raw)
     return {
-        "fit_score": fit_score,
-        "fit_summary": polish_text(coerce_llm_string(parsed, "fit_summary")),
-        "strengths": polish_bullets(coerce_llm_string_list(parsed, "strengths")),
-        "gaps": polish_bullets(coerce_llm_string_list(parsed, "gaps")),
+        "fit_score": parsed["fit_score"],
+        "fit_summary": polish_text(parsed["fit_summary"]),
+        "strengths": polish_bullets(parsed["strengths"]),
+        "gaps": polish_bullets(parsed["gaps"]),
     }
 
 
@@ -626,12 +625,9 @@ def loop1_fit_review(
             "task": "Honest fit review for this application.",
             "tailoring": _tailoring_context(stage1_entry, application),
             "candidate_cv": profile_for_prompt(profile),
-            "output_format": {
-                "fit_score": "integer 1-10",
-                "fit_summary": "2 sentences max",
-                "strengths": ["strings"],
-                "gaps": ["strings"],
-            },
+            "reply_format": (
+                "Plain text: FIT_SCORE, FIT_SUMMARY, STRENGTHS (bullets), GAPS (bullets) — see system prompt."
+            ),
         },
         improvement,
     )
@@ -658,22 +654,14 @@ def loop2_executive_summary(
                 "fit_review": fit_review,
                 "candidate_cv": profile_for_prompt(profile),
                 **keyword_prompt_block(keyword_pool),
-                "output_format": {"executive_summary": "3-4 sentences, first person"},
+                "reply_format": "Plain text paragraph only (3-4 sentences, first person) — see system prompt.",
             },
             claims_guidance,
         ),
         improvement,
     )
     raw = _call_loop(config, app_key, "loop 2 executive_summary", LOOP_2_EXECUTIVE_SUMMARY_SYSTEM, prompt)
-    parsed = parse_llm_json(raw)
-    if isinstance(parsed, dict):
-        field = parsed.get("executive_summary", "")
-        if isinstance(field, list):
-            summary = " ".join(str(x).strip() for x in field if str(x).strip())
-        else:
-            summary = coerce_llm_string(parsed, "executive_summary")
-    else:
-        summary = str(parsed).strip()
+    summary = parse_plain_paragraph(raw)
 
     used = keyword_pool.deduct_from_text(summary)
     _log_keywords_used("executive_summary", used, len(keyword_pool.available()))
@@ -952,13 +940,9 @@ def loop2_work_experience_entry(
                 "tailoring": _tailoring_context(stage1_entry, application),
                 "candidate_cv": profile_for_prompt(profile),
                 **keyword_prompt_block(keyword_pool),
-                "output_format": {
-                    "title": "position title",
-                    "company": "company name",
-                    "start_date": "YYYY-MM",
-                    "end_date": "YYYY-MM",
-                    "points": ["first-person bullet strings"],
-                },
+                "reply_format": (
+                    "Plain text: TITLE, COMPANY, START_DATE, END_DATE, BULLETS — see system prompt."
+                ),
             },
             claims_guidance,
         ),
@@ -972,21 +956,13 @@ def loop2_work_experience_entry(
         INTERLOOP_SYSTEMS[LOOP_2_WORK_EXPERIENCE_SYSTEM_KEY],
         prompt,
     )
-    parsed = parse_llm_json(raw)
-    if not isinstance(parsed, dict):
-        return {}
-    points = coerce_llm_bullets(parsed) or coerce_llm_string_list(parsed, "points")
+    parsed = parse_work_experience_entry(raw, experience)
+    points = parsed.get("points", [])
     entry = {
-        "title": polish_text(coerce_llm_string(parsed, "title") or str(experience.get("position", ""))),
-        "company": polish_text(
-            coerce_llm_string(parsed, "company")
-            or coerce_llm_string(parsed, "employer")
-            or str(experience.get("company", ""))
-        ),
-        "start_date": _format_month(
-            coerce_llm_string(parsed, "start_date") or str(experience.get("startDate", ""))
-        ),
-        "end_date": _format_month(coerce_llm_string(parsed, "end_date") or str(experience.get("endDate", ""))),
+        "title": polish_text(parsed.get("title", "") or str(experience.get("position", ""))),
+        "company": polish_text(parsed.get("company", "") or str(experience.get("company", ""))),
+        "start_date": _format_month(parsed.get("start_date", "") or str(experience.get("startDate", ""))),
+        "end_date": _format_month(parsed.get("end_date", "") or str(experience.get("endDate", ""))),
         "points": polish_bullets(points),
     }
 
@@ -1051,12 +1027,9 @@ def loop2_project_entry(
                 "tailoring": _tailoring_context(stage1_entry, application),
                 "candidate_cv": profile_for_prompt(profile),
                 **keyword_prompt_block(keyword_pool),
-                "output_format": {
-                    "title": "project name",
-                    "description": "2-3 sentence description grounded in project_entry only",
-                    "start_date": "YYYY-MM",
-                    "end_date": "YYYY-MM",
-                },
+                "reply_format": (
+                    "Plain text: TITLE, DESCRIPTION, START_DATE, END_DATE, TECH_STACK — see system prompt."
+                ),
             },
             claims_guidance,
         ),
@@ -1070,18 +1043,12 @@ def loop2_project_entry(
         INTERLOOP_SYSTEMS[LOOP_2_PROJECTS_SYSTEM_KEY],
         prompt,
     )
-    parsed = parse_llm_json(raw)
-    if not isinstance(parsed, dict):
-        return {}
+    parsed = parse_project_entry(raw, project)
     entry = {
-        "title": polish_text(coerce_llm_string(parsed, "title") or str(project.get("name", ""))),
-        "description": polish_text(
-            coerce_llm_string(parsed, "description") or str(project.get("description", ""))
-        ),
-        "start_date": _format_month(
-            coerce_llm_string(parsed, "start_date") or str(project.get("startDate", ""))
-        ),
-        "end_date": _format_month(coerce_llm_string(parsed, "end_date") or str(project.get("endDate", ""))),
+        "title": polish_text(parsed.get("title", "") or str(project.get("name", ""))),
+        "description": polish_text(parsed.get("description", "") or str(project.get("description", ""))),
+        "start_date": _format_month(parsed.get("start_date", "") or str(project.get("startDate", ""))),
+        "end_date": _format_month(parsed.get("end_date", "") or str(project.get("endDate", ""))),
     }
     used = keyword_pool.deduct_from_content(entry)
     _log_keywords_used(f"projects/{entry_index}", used, len(keyword_pool.available()))
@@ -1154,21 +1121,17 @@ def loop2_skills(
                     "Do NOT use description values (e.g. 'Scripting, ML pipelines') — use the key (e.g. 'Python').",
                 ],
                 **skills_keyword_prompt_block(keyword_pool, skills_settings),
-                "output_format": {
-                    "skills": [
-                        {
-                            "domain": "Domain 1",
-                            "sub_skills": ["must be exact strings from allowed_skills"],
-                        }
-                    ]
-                },
+                "reply_format": (
+                    f"Plain text: exactly {domain_count} lines, each Domain: skill1, skill2, ... "
+                    "(skills copied verbatim from allowed_skills)."
+                ),
             },
             claims_guidance,
         ),
         improvement,
     )
     raw = _call_loop(config, app_key, "loop 2 skills", LOOP_2_SKILLS_SYSTEM, prompt)
-    parsed = parse_llm_json(raw)
+    parsed = {"skills": parse_skills_domains(raw)}
     skills = _coerce_skills_map(parsed, skills_settings)
     grounding = _grounding_settings(config)
     if grounding["skills_from_profile_only"]:
@@ -1211,11 +1174,7 @@ def loop2_achievement_entry(
             "tailoring": _achievement_tailoring(stage1_entry, application),
             "candidate_cv": {"achievements": profile.get("achievements", {})},
             **keyword_prompt_block(keyword_pool),
-            "output_format": {
-                "name": "achievement title",
-                "description": "1-2 sentence description",
-                "date": "YYYY-MM",
-            },
+            "reply_format": "Plain text: NAME, DESCRIPTION, DATE — see system prompt.",
         },
         improvement,
     )
@@ -1227,8 +1186,8 @@ def loop2_achievement_entry(
         INTERLOOP_SYSTEMS[LOOP_2_ACHIEVEMENTS_SYSTEM_KEY],
         prompt,
     )
-    parsed = parse_llm_json(raw)
-    if isinstance(parsed, dict) and _is_valid_achievement_entry(parsed):
+    parsed = parse_achievement_entry(raw, achievement)
+    if _is_valid_achievement_entry(parsed):
         entry = _normalize_achievement_entry(parsed, achievement)
     else:
         entry = _normalize_achievement_entry({}, achievement)
@@ -1312,24 +1271,17 @@ def loop2_certifications(
                     "Each certification needs a 1-2 sentence description of job relevance.",
                     "description must NOT repeat the certification name or issuer verbatim.",
                 ],
-                "output_format": {
-                    "certifications": [
-                        {
-                            "name": "certification name",
-                            "issuer": "issuing organization",
-                            "description": "1-2 sentences on practical relevance to this role",
-                            "date": "YYYY-MM",
-                            "url": "",
-                        }
-                    ]
-                },
+                "reply_format": (
+                    "Plain text: up to 5 certification blocks (NAME, ISSUER, DESCRIPTION, DATE) "
+                    "separated by --- — see system prompt."
+                ),
             },
             claims_guidance,
         ),
         improvement,
     )
     raw = _call_loop(config, app_key, "loop 2 certifications", LOOP_2_CERTIFICATIONS_SYSTEM, prompt)
-    parsed = parse_llm_json(raw)
+    parsed = {"certifications": parse_certifications(raw)}
     certifications = _coerce_certifications(parsed, profile.get("certifications", {}))
 
     for key, entry in certifications.items():
@@ -1358,24 +1310,26 @@ def loop2_volunteer(
             "tailoring": _tailoring_context(stage1_entry, application),
             "candidate_cv": {"volunteer": volunteer},
             **keyword_prompt_block(keyword_pool),
-            "output_format": {
-                "volunteer_experience": {
-                    "volunteer 1": {
-                        "name": "",
-                        "description": "",
-                        "start_date": "YYYY-MM",
-                        "end_date": "YYYY-MM",
-                    }
-                }
-            },
+            "reply_format": (
+                "Plain text volunteer blocks (ORGANIZATION, ROLE, dates, DESCRIPTION) separated by ---, "
+                "or NONE if no volunteer experience."
+            ),
         },
         improvement,
     )
     raw = _call_loop(config, app_key, "loop 2 volunteer_experience", LOOP_2_VOLUNTEER_SYSTEM, prompt)
-    parsed = parse_llm_json(raw)
-    entries = _coerce_numbered_dict(parsed, "volunteer_experience", "volunteer")
-    if not entries:
-        entries = _coerce_numbered_dict(parsed, "volunteer", "volunteer")
+    if clean_raw(raw).upper() == "NONE":
+        return {}
+    records = parse_volunteer(raw)
+    entries: dict[str, Any] = {}
+    for index, record in enumerate(records, start=1):
+        entries[_numbered_key("volunteer", index)] = {
+            "name": polish_text(record.get("organization", "")),
+            "role": polish_text(record.get("role", "")),
+            "start_date": _format_month(record.get("start_date", "")),
+            "end_date": _format_month(record.get("end_date", "")),
+            "description": polish_text(record.get("description", "")),
+        }
 
     for key, entry in entries.items():
         used = keyword_pool.deduct_from_content(entry)
@@ -1399,13 +1353,12 @@ def loop2_interests(
             "tailoring": _tailoring_context(stage1_entry, application),
             "candidate_cv": {"interests": profile.get("interests", {})},
             **keyword_prompt_block(keyword_pool),
-            "output_format": {"interests": ["interest strings"]},
+            "reply_format": "Plain text: one comma-separated line of 3-6 interests.",
         },
         improvement,
     )
     raw = _call_loop(config, app_key, "loop 2 interests", LOOP_2_INTERESTS_SYSTEM, prompt)
-    parsed = parse_llm_json(raw)
-    interests = coerce_llm_string_list(parsed, "interests")
+    interests = parse_comma_list(raw)
     if isinstance(profile.get("interests"), dict) and not interests:
         interests = [str(k).strip() for k in profile["interests"] if str(k).strip()]
     interests = _ensure_interests(polish_bullets(interests), profile, min_items=3)
@@ -1427,33 +1380,6 @@ def _resume_sections_for_review(content: dict[str, Any], profile: dict) -> dict[
             continue
         sections[key] = content.get(key)
     return sections
-
-
-def _parse_quality_review(parsed: Any, expected_sections: list[str]) -> dict[str, dict[str, Any]]:
-    review: dict[str, dict[str, Any]] = {}
-    raw_sections: dict[str, Any] = {}
-
-    if isinstance(parsed, dict):
-        nested = parsed.get("sections", parsed)
-        if isinstance(nested, dict):
-            raw_sections = nested
-
-    for key in expected_sections:
-        item = raw_sections.get(key, {})
-        if isinstance(item, dict):
-            try:
-                quality = int(item.get("quality", 1))
-            except (TypeError, ValueError):
-                quality = 1
-            quality = max(1, min(10, quality))
-            review[key] = {
-                "quality": quality,
-                "feedback": polish_text(str(item.get("feedback", ""))),
-            }
-        else:
-            review[key] = {"quality": 1, "feedback": "Section not rated by reviewer."}
-
-    return review
 
 
 def _apply_skipped_quality_scores(
@@ -1528,14 +1454,16 @@ def verify_application(
                 "Only rate sections listed in resume_sections. "
                 "already_approved_sections passed a prior review and must not be re-scored."
             ),
-            "output_format": {
-                section: {"quality": "integer 1-10", "feedback": "1-2 actionable sentences"}
-                for section in sections_to_rate
-            },
+            "reply_format": (
+                "Plain text: one [section_name] block per resume_sections entry with "
+                "QUALITY: <1-10> and FEEDBACK: <text> — see system prompt."
+            ),
+            "sections_to_rate": list(sections_to_rate.keys()),
         }
         raw = _call_loop(config, app_key, "verification quality review", VERIFICATION_SYSTEM, prompt)
-        parsed = parse_llm_json(raw)
-        fresh_review = _parse_quality_review(parsed, list(sections_to_rate))
+        fresh_review = parse_quality_review(raw, list(sections_to_rate))
+        for key, item in fresh_review.items():
+            item["feedback"] = polish_text(item.get("feedback", ""))
     elif locked_sections:
         print(
             f"Stage 2 — {app_key}: all sections locked — skipping LLM verification",
@@ -1665,12 +1593,18 @@ def verify_and_refine_application(
     skills_settings = _skills_settings(config)
     master_keywords = build_master_keywords(stage1_entry.get("resume_keywords", {}), config)
     locked_sections: dict[str, dict[str, Any]] = {}
+    feedback_history: dict[str, list[str]] = {}
 
     quality_review = verify_application(
         config, app_key, stage1_entry, application, profile, content, locked_sections
     )
     _try_lock_sections(content, profile, quality_review, locked_sections, min_quality, skills_settings)
     _log_quality_review(app_key, quality_review, locked_sections)
+
+    for section in _failing_sections(quality_review, min_quality, locked_sections):
+        record_reviewer_feedback(
+            feedback_history, section, quality_review[section].get("feedback", "")
+        )
 
     refine_pass = 0
     while _failing_sections(quality_review, min_quality, locked_sections) and refine_pass < max_passes:
@@ -1685,11 +1619,18 @@ def verify_and_refine_application(
         for section in failing:
             locked_sections.pop(section, None)
             keyword_pool = _keyword_pool_for_regeneration(master_keywords, content, section)
-            feedback = quality_review[section].get("feedback", "")
-            improvement = _improvement_block(section, content.get(section), feedback)
+            improvement = build_quality_improvement_block(
+                section,
+                content.get(section),
+                feedback_history.get(section, []),
+                extra_rules=(
+                    "Keep only facts from candidate_cv. "
+                    "Do not invent employers, tools, or outcomes."
+                ),
+            )
             content[section] = run_content_section(
                 section,
-        config,
+                config,
                 app_key,
                 stage1_entry,
                 application,
@@ -1707,6 +1648,11 @@ def verify_and_refine_application(
         )
         _try_lock_sections(content, profile, quality_review, locked_sections, min_quality, skills_settings)
         _log_quality_review(app_key, quality_review, locked_sections)
+
+        for section in _failing_sections(quality_review, min_quality, locked_sections):
+            record_reviewer_feedback(
+                feedback_history, section, quality_review[section].get("feedback", "")
+            )
 
     if _failing_sections(quality_review, min_quality, locked_sections):
         print(
@@ -1990,20 +1936,34 @@ def _build_parser_review(
 def _style_regen_targets(issues_by_section: dict[str, list[str]], stage: str) -> list[str]:
     if "_document_style" not in issues_by_section:
         return []
+    issues = issues_by_section["_document_style"]
+    targets: set[str] = set()
+    for issue in issues:
+        if "projects/" in issue:
+            targets.add("projects")
+        if "work_experience/" in issue:
+            targets.add("work_experience")
+        if "achievements/" in issue:
+            targets.add("achievements")
+        if "executive_summary" in issue:
+            targets.add("executive_summary")
+        if "opening_paragraph" in issue or "body_paragraphs" in issue:
+            targets.add("opening_paragraph")
+            targets.add("body_paragraphs")
+    if targets:
+        return sorted(targets)
     if stage == "stage_2":
         return ["executive_summary", "work_experience"]
     return ["opening_paragraph", "body_paragraphs"]
 
 
 def _parser_improvement_block(section: str, prior_draft: Any, issues: list[str]) -> dict[str, Any]:
-    return {
-        "prior_draft": prior_draft,
-        "parser_issues": issues,
-        "instruction": (
-            f"Regenerate the {section} section. Fix every parser_issues item — "
-            "all required fields must be non-empty. Use only facts from candidate_cv."
-        ),
-    }
+    return build_parser_improvement_block(
+        section,
+        prior_draft,
+        issues,
+        extra_rules="All required fields must be non-empty. Use only facts from candidate_cv.",
+    )
 
 
 def _log_parser_review(app_key: str, parser_review: dict[str, dict[str, Any]]) -> None:
@@ -2065,6 +2025,7 @@ def parser_verify_and_regenerate(
 
     cert_settings = _certifications_settings(config)
     style_check = _style_verification_enabled(config)
+    parser_issue_history: dict[str, list[str]] = {}
 
     for pass_num in range(1, max_passes + 1):
         issues_by_section = parse_content_issues(
@@ -2099,7 +2060,14 @@ def parser_verify_and_regenerate(
 
         for section, issues in regen_plan.items():
             keyword_pool = _keyword_pool_for_regeneration(master_keywords, content, section)
-            improvement = _parser_improvement_block(section, content.get(section), issues)
+            prior_issues = parser_issue_history.get(section, [])
+            improvement = build_parser_improvement_block(
+                section,
+                content.get(section),
+                issues,
+                issue_history=prior_issues,
+                extra_rules="All required fields must be non-empty. Use only facts from candidate_cv.",
+            )
             content[section] = run_content_section(
                 section,
                 config,
@@ -2111,6 +2079,9 @@ def parser_verify_and_regenerate(
                 keyword_pool,
                 improvement,
             )
+
+        for section, issues in regen_plan.items():
+            record_parser_issues(parser_issue_history, section, issues)
 
         polished = polish_application_output(_content_without_meta(content))
         polished = finalize_application_content(polished, profile, skills_settings, cert_settings)

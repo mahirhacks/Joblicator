@@ -1,4 +1,5 @@
 import { Outlet } from "react-router-dom";
+import GenerationLog from "./GenerationLog.jsx";
 import Sidebar from "./Sidebar.jsx";
 
 export default function Layout() {
@@ -8,6 +9,7 @@ export default function Layout() {
       <main className="app-main">
         <Outlet />
       </main>
+      <GenerationLog />
     </div>
   );
 }

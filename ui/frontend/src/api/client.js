@@ -75,5 +75,17 @@ export const api = {
     }),
 
   generateStatus: () => request("/api/generate/status"),
-  startGenerate: () => request("/api/generate", { method: "POST" }),
+  generateLog: (offset = 0) =>
+    request(`/api/generate/log?offset=${encodeURIComponent(String(offset))}`),
+  startGenerate: async () => {
+    const response = await fetch("/api/generate", { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 409) {
+      return { ok: true, alreadyRunning: true, ...data };
+    }
+    if (!response.ok) {
+      throw new Error(data.error || `Request failed (${response.status})`);
+    }
+    return { ok: true, alreadyRunning: false, ...data };
+  },
 };

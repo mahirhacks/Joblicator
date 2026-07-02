@@ -2,13 +2,13 @@
 
 ollama:
   base_url: http://127.0.0.1:11434
-  model: gemma4:26b
+  model: deepseek-r1:14b
   think: false
   auto_start: true
 
 generation:
   temperature: 0.5
-  context_window: 8192
+  context_window: 16384
 
 applications:
   json: applications/local_applications.json

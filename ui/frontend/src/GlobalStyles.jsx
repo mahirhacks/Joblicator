@@ -1595,6 +1595,108 @@ body.sidebar-resizing * {
   50% { transform: translateX(180%); opacity: 1; }
 }
 
+.generation-log-panel {
+  position: fixed;
+  bottom: 0;
+  left: var(--sidebar-w);
+  right: 0;
+  z-index: 350;
+  background: #0c0c0f;
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+}
+
+.generation-log-panel.running {
+  border-top-color: rgba(129, 140, 248, 0.35);
+}
+
+.generation-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.generation-log-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.generation-log-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.generation-log-dot.active {
+  background: var(--accent-hover);
+  box-shadow: 0 0 0 4px rgba(129, 140, 248, 0.18);
+  animation: gen-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes gen-dot-pulse {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
+.generation-log-chevron {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.generation-log-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.generation-log-btn {
+  padding: 0.28rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.generation-log-btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.generation-log-body {
+  margin: 0;
+  max-height: min(240px, 32vh);
+  overflow: auto;
+  padding: 0.85rem 1rem 1rem;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  color: #c8d0e0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #08080b;
+}
+
+.app-shell:has(.generation-log-panel.running) .app-main {
+  padding-bottom: min(280px, 36vh);
+}
+
 .applications-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));

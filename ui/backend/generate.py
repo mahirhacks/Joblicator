@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent
 DYNAMIC_ENGINE = ROOT / "engine" / "dynamic_engine"
 STATIC_ENGINE = ROOT / "engine" / "static_engine"
 
@@ -23,11 +24,28 @@ def _setup_paths() -> None:
             sys.path.insert(0, path)
 
 
+def _ui_progress_callback() -> Callable[[str], None] | None:
+    if "--ui" not in sys.argv:
+        return None
+    if str(BACKEND_DIR) not in sys.path:
+        sys.path.insert(0, str(BACKEND_DIR))
+    from store import save_generate_status  # noqa: E402
+
+    def _update(step: str) -> None:
+        save_generate_status(
+            {"running": True, "step": step, "error": None, "finished_at": None}
+        )
+
+    return _update
+
+
 def generate(progress_callback: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Run all pipeline stages in order. Raises on first failure."""
     _setup_paths()
 
-    from utils import ensure_project_path  # noqa: E402
+    from utils import configure_stdio_utf8, ensure_project_path, log_stderr  # noqa: E402
+
+    configure_stdio_utf8()
     from stage_1 import run as run_stage_1  # noqa: E402
     from stage_2 import run as run_stage_2  # noqa: E402
     from stage_3 import run as run_stage_3  # noqa: E402
@@ -43,9 +61,12 @@ def generate(progress_callback: Callable[[str], None] | None = None) -> dict[str
         ("build", "Static build — CV & cover letter PDFs", run_build),
     ]
 
+    if progress_callback is None:
+        progress_callback = _ui_progress_callback()
+
     results: dict[str, Any] = {}
     for key, label, step in steps:
-        print(f"\n=== {label} ===", file=sys.stderr)
+        log_stderr(f"\n=== {label} ===")
         if progress_callback:
             progress_callback(key)
         try:
@@ -57,17 +78,18 @@ def generate(progress_callback: Callable[[str], None] | None = None) -> dict[str
 
 
 def main() -> None:
+    _setup_paths()
+    from utils import configure_stdio_utf8, log_stderr  # noqa: E402
+
+    configure_stdio_utf8()
     try:
         outcome = generate()
-    except (FileNotFoundError, ValueError, RuntimeError, ImportError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+    except Exception as exc:
+        log_stderr(f"Error: {exc}")
         raise SystemExit(1) from exc
 
     build_results = outcome.get("build", [])
-    print(
-        f"\nPipeline complete: {len(build_results)} application(s) built.",
-        file=sys.stderr,
-    )
+    log_stderr(f"\nPipeline complete: {len(build_results)} application(s) built.")
 
 
 if __name__ == "__main__":

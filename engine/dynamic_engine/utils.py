@@ -14,6 +14,30 @@ PROJECT_ROOT = ENGINE_DIR.parent.parent
 CONFIG_PATH = ENGINE_DIR / "config.yaml"
 
 
+def configure_stdio_utf8() -> None:
+    """Avoid Windows console encoding crashes when logging unicode."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
+def log_stderr(message: str) -> None:
+    """Write to stderr without raising on Windows console/thread issues."""
+    text = str(message)
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except OSError:
+        try:
+            sys.stderr.buffer.write((text + "\n").encode("utf-8", errors="replace"))
+            sys.stderr.buffer.flush()
+        except OSError:
+            pass
+
+
 def load_config(path: Path = CONFIG_PATH) -> dict:
     try:
         import yaml
@@ -303,3 +327,89 @@ def enforce_max_words(text: str, max_words: int) -> tuple[str, bool]:
     if max_words <= 0 or count_words(cleaned) <= max_words:
         return cleaned, False
     return trim_to_max_words(cleaned, max_words), True
+
+
+def record_reviewer_feedback(
+    history: dict[str, list[str]],
+    section: str,
+    feedback: Any,
+) -> None:
+    """Append unique reviewer feedback for a section (carry-on across refinement passes)."""
+    text = str(feedback or "").strip()
+    if not text:
+        return
+    entries = history.setdefault(section, [])
+    if not entries or entries[-1] != text:
+        entries.append(text)
+
+
+def build_quality_improvement_block(
+    section: str,
+    prior_draft: Any,
+    feedback_history: list[str],
+    *,
+    extra_rules: str = "",
+) -> dict[str, Any]:
+    """Build an improvement payload with current + all prior reviewer feedback."""
+    history = [str(item).strip() for item in feedback_history if str(item).strip()]
+    current = history[-1] if history else ""
+    previous = history[:-1]
+
+    instruction = (
+        f"Rewrite the {section} section addressing reviewer_feedback "
+        "and every item in previous_reviewer_feedback that still applies. "
+        "Do not repeat mistakes called out in earlier review rounds."
+    )
+    if extra_rules:
+        instruction = f"{instruction} {extra_rules}"
+
+    block: dict[str, Any] = {
+        "prior_draft": prior_draft,
+        "reviewer_feedback": current,
+        "instruction": instruction,
+    }
+    if previous:
+        block["previous_reviewer_feedback"] = previous
+    return block
+
+
+def record_parser_issues(
+    history: dict[str, list[str]],
+    section: str,
+    issues: list[str],
+) -> None:
+    """Append unique parser issues for a section (carry-on across parser passes)."""
+    entries = history.setdefault(section, [])
+    for issue in issues:
+        text = str(issue).strip()
+        if text and text not in entries:
+            entries.append(text)
+
+
+def build_parser_improvement_block(
+    section: str,
+    prior_draft: Any,
+    parser_issues: list[str],
+    *,
+    issue_history: list[str] | None = None,
+    extra_rules: str = "",
+) -> dict[str, Any]:
+    """Build a parser-fix payload with current issues plus prior unresolved issues."""
+    prior = [str(item).strip() for item in (issue_history or []) if str(item).strip()]
+    current = [str(item).strip() for item in parser_issues if str(item).strip()]
+
+    instruction = (
+        f"Regenerate the {section} section. Fix every parser_issues item "
+        "and every previous_parser_issues item that still applies."
+    )
+    if extra_rules:
+        instruction = f"{instruction} {extra_rules}"
+
+    block: dict[str, Any] = {
+        "prior_draft": prior_draft,
+        "parser_issues": current,
+        "instruction": instruction,
+    }
+    if prior:
+        block["previous_parser_issues"] = prior
+    return block

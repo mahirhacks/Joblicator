@@ -189,6 +189,24 @@ export default function ApplicationsPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await api.generateStatus();
+        if (cancelled || !status.running) return;
+        setGenerating(true);
+        setGenStatus(status);
+        pollGenerate();
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pollGenerate]);
+
   const counts = useMemo(() => statusCounts(apps), [apps]);
 
   const filtered = useMemo(() => {
@@ -225,7 +243,10 @@ export default function ApplicationsPage() {
   async function runGenerate() {
     setGenerating(true);
     try {
-      await api.startGenerate();
+      const result = await api.startGenerate();
+      if (result.alreadyRunning) {
+        showToast("Generation already in progress");
+      }
       pollGenerate();
     } catch (e) {
       setGenerating(false);

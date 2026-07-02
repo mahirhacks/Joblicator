@@ -72,6 +72,11 @@ class JoblicationHandler(BaseHTTPRequestHandler):
     def _route_path(self) -> str:
         return urlparse(self.path).path
 
+    def _query_params(self) -> dict[str, list[str]]:
+        from urllib.parse import parse_qs
+
+        return parse_qs(urlparse(self.path).query)
+
     def _dispatch_api(self, method: str) -> bool:
         path = self._route_path()
         if not path.startswith("/api/"):
@@ -129,6 +134,11 @@ class JoblicationHandler(BaseHTTPRequestHandler):
             return True
         if parts == ["api", "generate", "status"]:
             self._respond(*handlers.generate_status())
+            return True
+        if parts == ["api", "generate", "log"]:
+            params = self._query_params()
+            offset = params.get("offset", ["0"])[0]
+            self._respond(*handlers.get_generate_log(offset))
             return True
         if len(parts) >= 3 and parts[1] == "files":
             rel = "/".join(unquote(p) for p in parts[2:])
@@ -259,7 +269,17 @@ class JoblicationHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    from handlers import recover_generate_on_startup
     from store import applications_path, profile_path
+
+    recover_generate_on_startup()
+
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
 
     server = HTTPServer((HOST, PORT), JoblicationHandler)
     print(f"Joblication UI -> http://{HOST}:{PORT}")

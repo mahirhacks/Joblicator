@@ -20,7 +20,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ollama import call_ollama, parse_keyword_list, parse_llm_json
+from grounding import sanitize_profile
+from ollama import call_ollama
+from plain_text import (
+    PLAIN_TEXT_REPLY,
+    parse_comma_list,
+    parse_keyword_variants as parse_keyword_variants_text,
+    parse_stage1_context,
+)
 from prompts.prompt_stage_1 import (
     KEYWORD_SECTION_ORDER,
     LOOP_1_SYSTEM,
@@ -28,13 +35,11 @@ from prompts.prompt_stage_1 import (
     LOOP_2_SYSTEMS,
     LOOP_3_KEYWORD_VARIANTS_SYSTEM,
 )
-from grounding import sanitize_profile
 from utils import (
     CONFIG_PATH,
     append_unique_keywords,
     application_text,
     build_payload_header,
-    coerce_requirements_dict,
     dedupe_keywords,
     distribute_keyword_cap,
     ensure_project_path,
@@ -42,7 +47,6 @@ from utils import (
     is_duplicate_keyword,
     load_config,
     load_json,
-    normalize_work_mode,
     profile_for_prompt,
     resolve_output_path,
     resolve_path,
@@ -61,17 +65,7 @@ def _application_key(index: int) -> str:
 
 
 def _parse_context(raw: str) -> dict[str, Any]:
-    parsed = parse_llm_json(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("Loop 1 response is not a JSON object")
-
-    return {
-        "company_summary": str(parsed.get("company_summary", "")).strip(),
-        "role_summary": str(parsed.get("role_summary", "")).strip(),
-        "work_mode": normalize_work_mode(parsed.get("work_mode")),
-        "must_have": coerce_requirements_dict(parsed.get("must_have", {})),
-        "nice_to_have": coerce_requirements_dict(parsed.get("nice_to_have", {})),
-    }
+    return parse_stage1_context(raw)
 
 
 def loop1_context(
@@ -92,13 +86,10 @@ def loop1_context(
             "text": job_text,
         },
         "candidate_cv": profile_for_prompt(profile),
-        "output_format": {
-            "company_summary": "2-3 sentences",
-            "role_summary": "2-3 sentences",
-            "work_mode": "onsite|hybrid|remote|unknown",
-            "must_have": {"requirement_1": "explicit must-have"},
-            "nice_to_have": {"requirement_1": "optional preference"},
-        },
+        "reply_format": (
+            "Plain text with labeled sections COMPANY_SUMMARY, ROLE_SUMMARY, WORK_MODE, "
+            "MUST_HAVE (comma-separated), NICE_TO_HAVE (comma-separated) — see system prompt."
+        ),
     }
 
     print(f"Stage 1 — {app_key}: loop 1 context ...", file=sys.stderr)
@@ -109,7 +100,7 @@ def loop1_context(
             (
                 f"Stage 1 loop 1 — context for {app_key}.\n"
                 f"{json.dumps(prompt, indent=2, ensure_ascii=False)}\n\n"
-                "Return JSON only."
+                f"{PLAIN_TEXT_REPLY}"
             ),
         ),
     )
@@ -136,9 +127,9 @@ def loop2_section_keywords(
         "section_key": section_key,
         "pick_count": pick_count,
         "rules": [
-            f"Return at most {pick_count} items in matched.",
+            f"Return at most {pick_count} items.",
             "Extract from the job posting and context only.",
-            'Return JSON only: {"matched": ["..."]}',
+            "Reply with a single comma-separated line of keywords.",
         ],
         "job_posting": {
             "title": application.get("title", ""),
@@ -156,12 +147,12 @@ def loop2_section_keywords(
             (
                 f"Stage 1 loop 2 — {section_key} for {app_key}.\n"
                 f"{json.dumps(prompt, indent=2, ensure_ascii=False)}\n\n"
-                'Return {"matched": [...]} only.'
+                f"{PLAIN_TEXT_REPLY}"
             ),
         ),
     )
 
-    keywords = parse_keyword_list(raw)
+    keywords = parse_comma_list(raw, max_items=pick_count)
     capped = append_unique_keywords([], keywords, pick_count)
     return dedupe_keywords(capped)
 
@@ -203,27 +194,7 @@ def _parse_keyword_variants(
     raw: str,
     resume_keywords: dict[str, list[str]],
 ) -> dict[str, dict[str, list[str]]]:
-    parsed = parse_llm_json(raw)
-    result: dict[str, dict[str, list[str]]] = {}
-    if not isinstance(parsed, dict):
-        return result
-
-    for section_key, base_keywords in resume_keywords.items():
-        section_data = parsed.get(section_key, {})
-        if not isinstance(section_data, dict):
-            continue
-
-        variants: dict[str, list[str]] = {}
-        for keyword, items in section_data.items():
-            key = str(keyword).strip()
-            if not key:
-                continue
-            cleaned = dedupe_keywords(_coerce_variant_list(items))[:2]
-            if cleaned:
-                variants[key] = cleaned
-        result[section_key] = variants
-
-    return result
+    return parse_keyword_variants_text(raw, resume_keywords)
 
 
 def _lookup_variants(keyword: str, variants_map: dict[str, list[str]]) -> list[str]:
@@ -297,12 +268,10 @@ def loop3_keyword_variants(
         },
         "context": context,
         "resume_keywords": keywords_for_variants,
-        "output_format": {
-            section_key: {
-                "source keyword": ["variant 1", "variant 2"]
-            }
-            for section_key in keywords_for_variants
-        },
+        "reply_format": (
+            "Plain text: one [section_key] block per resume_keywords key; "
+            "each line: source keyword | variant 1 | variant 2"
+        ),
     }
 
     print(f"Stage 1 — {app_key}: loop 3 keyword variants ...", file=sys.stderr)
@@ -313,7 +282,7 @@ def loop3_keyword_variants(
             (
                 f"Stage 1 loop 3 — keyword variants for {app_key}.\n"
                 f"{json.dumps(prompt, indent=2, ensure_ascii=False)}\n\n"
-                "Return JSON only."
+                f"{PLAIN_TEXT_REPLY}"
             ),
         ),
     )

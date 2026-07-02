@@ -73,6 +73,10 @@ def generate_status_path() -> Path:
     return DYNAMIC_ENGINE / "data" / "generate_status.json"
 
 
+def generate_log_path() -> Path:
+    return DYNAMIC_ENGINE / "data" / "generate.log"
+
+
 def outputs_dir() -> Path:
     settings = load_template_settings()
     rel = str(settings.get("export", {}).get("output_dir", "outputs"))

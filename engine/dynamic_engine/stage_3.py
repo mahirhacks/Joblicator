@@ -35,13 +35,15 @@ from grounding import (
 from style_validator import scan_letter_style
 from ollama import (
     call_ollama,
-    coerce_llm_string,
     coerce_llm_string_list,
-    extract_json_string_field,
-    extract_string_array_from_raw,
-    parse_llm_json,
-    parse_llm_json_field,
     terminate_ollama,
+)
+from plain_text import (
+    PLAIN_TEXT_REPLY,
+    parse_letter_prose,
+    parse_line_list,
+    parse_ordered_lines,
+    parse_quality_review,
 )
 from prompts.prompt_stage_3 import (
     DEFAULT_BODY_PARAGRAPHS,
@@ -70,7 +72,9 @@ from verification import (
 from utils import (
     CONFIG_PATH,
     application_text,
+    build_parser_improvement_block,
     build_payload_header,
+    build_quality_improvement_block,
     build_sources,
     ensure_project_path,
     export_json,
@@ -79,6 +83,8 @@ from utils import (
     load_config,
     load_json,
     profile_for_prompt,
+    record_parser_issues,
+    record_reviewer_feedback,
     resolve_output_path,
     resolve_path,
 )
@@ -141,32 +147,6 @@ def _resolve_shared_claims(
     return claims_to_avoid, resolved_gaps, ledger
 
 
-def _coerce_body_paragraphs_list(raw: str, parsed: Any, body_count: int) -> list[str]:
-    items: list[str] = []
-    if isinstance(parsed, dict):
-        raw_items = parsed.get("body_paragraphs")
-        if isinstance(raw_items, list):
-            items = [str(item).strip() for item in raw_items if str(item).strip()]
-        if not items:
-            for index in range(1, body_count + 1):
-                piece = coerce_llm_string(parsed, f"body_paragraph_{index}")
-                if piece:
-                    items.append(piece)
-    if not items:
-        items = extract_string_array_from_raw(raw, "body_paragraphs")
-    if not items:
-        try:
-            fallback = parse_llm_json(raw)
-            if isinstance(fallback, dict):
-                return _coerce_body_paragraphs_list(raw, fallback, body_count)
-        except json.JSONDecodeError:
-            pass
-    return _normalize_body_paragraphs(
-        [_fix_paragraph_spacing(item) for item in items if str(item).strip()],
-        body_count,
-    )
-
-
 def _messages(system: str, user: str) -> list[dict[str, str]]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -181,27 +161,13 @@ def _prompt_with_improvement(prompt: dict[str, Any], improvement: dict[str, Any]
     return {**prompt, "improvement": improvement}
 
 
-def _improvement_block(section: str, prior_draft: Any, feedback: str) -> dict[str, Any]:
-    return {
-        "prior_draft": prior_draft,
-        "reviewer_feedback": feedback,
-        "instruction": (
-            f"Rewrite the {section} addressing reviewer_feedback. "
-            "Keep only facts from candidate_cv and resume_draft. "
-            "Maintain consistency across opening, body, and closing."
-        ),
-    }
-
-
 def _parser_improvement_block(section: str, prior_draft: Any, issues: list[str]) -> dict[str, Any]:
-    return {
-        "prior_draft": prior_draft,
-        "parser_issues": issues,
-        "instruction": (
-            f"Regenerate the {section} section. Fix every parser_issues item — "
-            "all required fields must be non-empty. Use only CV and resume_draft facts."
-        ),
-    }
+    return build_parser_improvement_block(
+        section,
+        prior_draft,
+        issues,
+        extra_rules="All required fields must be non-empty. Use only CV and resume_draft facts.",
+    )
 
 
 def _verification_settings(config: dict) -> dict[str, Any]:
@@ -403,24 +369,6 @@ def _apply_letter_prose(content: dict[str, Any], prose: dict[str, Any], body_cou
     content["closing_paragraph"] = _fix_paragraph_spacing(str(prose.get("closing_paragraph", "")))
 
 
-def _coerce_letter_prose(raw: str, parsed: Any, body_count: int) -> dict[str, Any]:
-    opening = ""
-    closing = ""
-    if isinstance(parsed, dict):
-        opening = coerce_llm_string(parsed, "opening_paragraph")
-        closing = coerce_llm_string(parsed, "closing_paragraph")
-    if not opening:
-        opening = extract_json_string_field(raw, "opening_paragraph")
-    if not closing:
-        closing = extract_json_string_field(raw, "closing_paragraph")
-    body = _coerce_body_paragraphs_list(raw, parsed if isinstance(parsed, dict) else {}, body_count)
-    return {
-        "opening_paragraph": _fix_paragraph_spacing(opening),
-        "body_paragraphs": body,
-        "closing_paragraph": _fix_paragraph_spacing(closing),
-    }
-
-
 def _finalize_letter_prose(
     prose: dict[str, Any],
     config: dict,
@@ -505,11 +453,9 @@ def loop_letter_prose(
             "candidate_cv": profile_for_prompt(profile),
             **letter_guidance,
             **keyword_prompt_block(keyword_pool),
-            "output_format": {
-                "opening_paragraph": "2-4 sentences, first person",
-                "body_paragraphs": [f"exactly {body_count} non-empty strings"],
-                "closing_paragraph": "2-3 sentences, first person, no sign-off",
-            },
+            "reply_format": (
+                f"Plain text: OPENING, BODY_1..BODY_{body_count}, CLOSING labeled sections — see system prompt."
+            ),
         },
         improvement,
     )
@@ -523,11 +469,7 @@ def loop_letter_prose(
         loop_name = "loop letter_prose (quality rewrite)"
 
     raw = _call_loop(config, app_key, loop_name, LOOP_LETTER_PROSE_SYSTEM, prompt)
-    try:
-        parsed = parse_llm_json(raw)
-    except json.JSONDecodeError:
-        parsed = {}
-    prose = _coerce_letter_prose(raw, parsed, body_count)
+    prose = parse_letter_prose(raw, body_count)
     prose = _finalize_letter_prose(prose, config, gaps_addressed, body_count)
     guidance = letter_guidance.get("letter_guidance", {})
     temp = {
@@ -597,7 +539,7 @@ def _call_loop(
             (
                 f"Stage 3 {loop_name} for {app_key}.\n"
                 f"{json.dumps(prompt, indent=2, ensure_ascii=False)}\n\n"
-                "Return JSON only."
+                f"{PLAIN_TEXT_REPLY}"
             ),
         ),
     )
@@ -639,14 +581,13 @@ def loop_claims_to_avoid(
             "task": "List claims the letter must not make based on fit_review gaps.",
             "gaps": gaps,
             "fit_review": stage2_entry.get("fit_review", {}),
-            "output_format": {"claims_to_avoid": ["short phrases"]},
+            "reply_format": "One short phrase per line, same order as gaps. Empty line = no claim to avoid.",
         },
         improvement,
     )
     raw = _call_loop(config, app_key, "loop 1 claims_to_avoid", LOOP_CLAIMS_SYSTEM, prompt)
-    parsed = parse_llm_json_field(raw, "claims_to_avoid")
-    claims = polish_bullets(coerce_llm_string_list(parsed, "claims_to_avoid"))
-    return claims if claims else gaps
+    claims = polish_bullets(parse_ordered_lines(raw, len(gaps)))
+    return [c for c in claims if c] if any(c for c in claims) else gaps
 
 
 def loop_gaps_addressed(
@@ -668,19 +609,12 @@ def loop_gaps_addressed(
             "claims_to_avoid": claims_to_avoid,
             "fit_review": stage2_entry.get("fit_review", {}),
             "candidate_cv": profile_for_prompt(profile),
-            "output_format": {"gaps_addressed": ["one sentence per gap, same order"]},
+            "reply_format": "One honest first-person sentence per line, same order as gaps. Empty line = skip.",
         },
         improvement,
     )
     raw = _call_loop(config, app_key, "loop 2 gaps_addressed", LOOP_GAPS_SYSTEM, prompt)
-    try:
-        parsed = parse_llm_json_field(raw, "gaps_addressed")
-    except json.JSONDecodeError:
-        print(f"  warning: could not parse gaps_addressed JSON for {app_key}", file=sys.stderr)
-        parsed = {"gaps_addressed": []}
-    addressed = coerce_llm_string_list(parsed, "gaps_addressed")
-    if len(addressed) < len(gaps):
-        addressed.extend([""] * (len(gaps) - len(addressed)))
+    addressed = parse_ordered_lines(raw, len(gaps))
     return [
         _fix_paragraph_spacing(str(item))
         for item in addressed[: len(gaps)]
@@ -841,21 +775,6 @@ def _letter_style_regen_targets(issues_by_section: dict[str, list[str]]) -> list
     return [LETTER_PROSE_SECTION]
 
 
-def _is_rated_review_item(item: Any) -> bool:
-    return isinstance(item, dict) and "quality" in item
-
-
-def _coerce_review_item(item: dict[str, Any]) -> dict[str, Any]:
-    try:
-        quality = int(item.get("quality", 1))
-    except (TypeError, ValueError):
-        quality = 1
-    return {
-        "quality": max(1, min(10, quality)),
-        "feedback": polish_text(str(item.get("feedback", ""))),
-    }
-
-
 def _letter_sections_for_review(content: dict[str, Any], body_count: int) -> dict[str, Any]:
     return {LETTER_PROSE_SECTION: _letter_prose_snapshot(content, body_count)}
 
@@ -869,50 +788,6 @@ def _sections_to_rate(
         if key not in locked_sections:
             rated[key] = value
     return rated
-
-
-def _verification_output_format(sections_to_rate: dict[str, Any]) -> dict[str, Any]:
-    return {
-        section: {"quality": "integer 1-10", "feedback": "2-4 actionable sentences"}
-        for section in sections_to_rate
-    }
-
-
-def _parse_quality_review(
-    parsed: Any,
-    sections_to_rate: dict[str, Any],
-    body_count: int,
-) -> dict[str, dict[str, Any]]:
-    review: dict[str, dict[str, Any]] = {}
-    raw_sections: dict[str, Any] = {}
-    if isinstance(parsed, dict):
-        nested = parsed.get("sections", parsed)
-        if isinstance(nested, dict):
-            raw_sections = nested
-
-    for key in sections_to_rate:
-        item = raw_sections.get(key)
-        if _is_rated_review_item(item):
-            review[key] = _coerce_review_item(item)
-        else:
-            review[key] = {"quality": 1, "feedback": f"{key} not rated by reviewer."}
-    return review
-
-
-def _extract_quality_review_fallback(
-    raw: str,
-    sections_to_rate: dict[str, Any],
-    body_count: int,
-) -> dict[str, dict[str, Any]]:
-    from ollama import _extract_single_section_review, clean_llm_json
-
-    text = clean_llm_json(raw)
-    review: dict[str, dict[str, Any]] = {}
-    for key in sections_to_rate:
-        item = _extract_single_section_review(text, key)
-        if item:
-            review[key] = item
-    return review
 
 
 def _merge_quality_review(
@@ -1091,16 +966,15 @@ def verify_letter(
                 "Rate letter_prose as one unit — opening, all body paragraphs, and closing together. "
                 "Do not re-score already_approved_sections."
             ),
-            "output_format": {
-                "sections": _verification_output_format(sections_to_rate),
-            },
+            "reply_format": (
+                "Plain text: one [section_name] block per letter_sections entry with "
+                "QUALITY: <1-10> and FEEDBACK: <text> — see system prompt."
+            ),
+            "sections_to_rate": list(sections_to_rate.keys()),
         }
         for attempt in range(2):
             raw = _call_loop(config, app_key, "verification quality review", VERIFICATION_SYSTEM, prompt)
-            try:
-                fresh_review = _parse_quality_review(parse_llm_json(raw), sections_to_rate, body_count)
-            except json.JSONDecodeError:
-                fresh_review = _extract_quality_review_fallback(raw, sections_to_rate, body_count)
+            fresh_review = parse_quality_review(raw, list(sections_to_rate.keys()))
 
             if expected_keys <= set(fresh_review.keys()):
                 break
@@ -1193,6 +1067,7 @@ def verify_and_refine_letter(
     max_passes = int(settings.get("max_passes", 3))
     max_body_words = _body_paragraph_max_words(config)
     locked_sections: dict[str, dict[str, Any]] = {}
+    feedback_history: dict[str, list[str]] = {}
 
     quality_review = verify_letter(
         config, app_key, stage1_entry, application, profile, stage2_entry, content, body_count, locked_sections
@@ -1201,6 +1076,11 @@ def verify_and_refine_letter(
         content, quality_review, locked_sections, min_quality, body_count, has_gaps, config, max_body_words
     )
     _log_quality_review(app_key, quality_review, locked_sections)
+
+    for section in _failing_sections(quality_review, min_quality, locked_sections):
+        record_reviewer_feedback(
+            feedback_history, section, quality_review[section].get("feedback", "")
+        )
 
     refine_pass = 0
     while _failing_sections(quality_review, min_quality, locked_sections) and refine_pass < max_passes:
@@ -1214,11 +1094,14 @@ def verify_and_refine_letter(
             locked_sections.pop(section, None)
             keyword_pool = KeywordPool(master_keywords)
             keyword_pool.reset()
-            section_review = quality_review.get(section, {})
-            improvement = _improvement_block(
-                section,
+            improvement = build_quality_improvement_block(
+                LETTER_PROSE_SECTION,
                 _letter_prose_snapshot(content, body_count),
-                section_review.get("feedback", ""),
+                feedback_history.get(section, []),
+                extra_rules=(
+                    "Keep only facts from candidate_cv and resume_draft. "
+                    "Maintain consistency across opening, body, and closing."
+                ),
             )
             regenerate_letter_prose(
                 config,
@@ -1244,6 +1127,11 @@ def verify_and_refine_letter(
             content, quality_review, locked_sections, min_quality, body_count, has_gaps, config, max_body_words
         )
         _log_quality_review(app_key, quality_review, locked_sections)
+
+        for section in _failing_sections(quality_review, min_quality, locked_sections):
+            record_reviewer_feedback(
+                feedback_history, section, quality_review[section].get("feedback", "")
+            )
 
     content["quality_review"] = quality_review
     return content
@@ -1281,6 +1169,7 @@ def parser_verify_and_regenerate_letter(
     max_body_words = _body_paragraph_max_words(config)
     style_check = _style_verification_enabled(config)
     scan_content = _content_without_meta(content)
+    parser_issue_history: dict[str, list[str]] = {}
 
     for pass_num in range(1, max_passes + 1):
         issues_by_section = parse_letter_issues(
@@ -1327,10 +1216,12 @@ def parser_verify_and_regenerate_letter(
 
             keyword_pool = KeywordPool(master_keywords)
             keyword_pool.reset()
-            improvement = _parser_improvement_block(
+            improvement = build_parser_improvement_block(
                 LETTER_PROSE_SECTION,
                 _letter_prose_snapshot(content, body_count),
                 prose_issues,
+                issue_history=parser_issue_history.get(LETTER_PROSE_SECTION, []),
+                extra_rules="All required fields must be non-empty. Use only CV and resume_draft facts.",
             )
             regenerate_letter_prose(
                 config,
@@ -1344,9 +1235,11 @@ def parser_verify_and_regenerate_letter(
                 body_count,
                 improvement,
             )
+            record_parser_issues(parser_issue_history, LETTER_PROSE_SECTION, prose_issues)
         elif "gaps_addressed" in issues_by_section:
             keyword_pool = KeywordPool(master_keywords)
             keyword_pool.reset()
+            gap_issues = issues_by_section["gaps_addressed"]
             content["gaps_addressed"] = run_letter_section(
                 "gaps_addressed",
                 config,
@@ -1358,12 +1251,15 @@ def parser_verify_and_regenerate_letter(
                 content,
                 keyword_pool,
                 body_count,
-                _parser_improvement_block(
+                build_parser_improvement_block(
                     "gaps_addressed",
                     content.get("gaps_addressed"),
-                    issues_by_section["gaps_addressed"],
+                    gap_issues,
+                    issue_history=parser_issue_history.get("gaps_addressed", []),
+                    extra_rules="All required fields must be non-empty. Use only CV and resume_draft facts.",
                 ),
             )
+            record_parser_issues(parser_issue_history, "gaps_addressed", gap_issues)
 
         meta = {key: content[key] for key in META_CONTENT_KEYS if key in content}
         content.update(polish_letter_output(_content_without_meta(content), body_count))

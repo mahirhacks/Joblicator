@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -12,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from store import (
+    DYNAMIC_ENGINE,
     ROOT,
     applications_path,
     custom_templates_path,
@@ -22,6 +26,7 @@ from store import (
     load_generate_status,
     load_profile,
     load_template_settings,
+    generate_log_path,
     outputs_dir,
     profile_path,
     resolve_output_for_slug,
@@ -39,6 +44,23 @@ VALID_STATUSES = frozenset(
 )
 
 _generate_thread: threading.Thread | None = None
+
+
+def recover_generate_on_startup() -> None:
+    """Server restart kills the worker thread — clear stale in-progress status."""
+    global _generate_thread
+    _generate_thread = None
+    status = load_generate_status()
+    if not status.get("running"):
+        return
+    save_generate_status(
+        {
+            "running": False,
+            "step": "failed",
+            "error": "Generation was interrupted (server restarted). Click Generate all to try again.",
+            "finished_at": _now_iso(),
+        }
+    )
 
 
 def _json_response(status: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -373,18 +395,59 @@ def generate_status() -> tuple[int, dict[str, Any]]:
     return _json_response(200, load_generate_status())
 
 
+def get_generate_log(offset: str = "0") -> tuple[int, dict[str, Any]]:
+    try:
+        start = max(0, int(offset))
+    except (TypeError, ValueError):
+        start = 0
+
+    status = load_generate_status()
+    path = generate_log_path()
+    if not path.is_file():
+        return _json_response(
+            200,
+            {
+                "text": "",
+                "offset": 0,
+                "running": bool(status.get("running")),
+                "step": str(status.get("step", "")),
+            },
+        )
+
+    content = path.read_text(encoding="utf-8", errors="replace")
+    if start > len(content):
+        start = len(content)
+    return _json_response(
+        200,
+        {
+            "text": content[start:],
+            "offset": len(content),
+            "running": bool(status.get("running")),
+            "step": str(status.get("step", "")),
+        },
+    )
+
+
 def start_generate() -> tuple[int, dict[str, Any]]:
     global _generate_thread
     status = load_generate_status()
     if status.get("running"):
-        return _json_response(409, {"error": "Generation already in progress", **status})
+        if _generate_thread is not None and _generate_thread.is_alive():
+            return _json_response(409, {"error": "Generation already in progress", **status})
+        # Previous run crashed without clearing status — allow a new run.
+        status = {**status, "running": False, "step": "failed", "error": status.get("error") or "Previous run stopped unexpectedly"}
 
     def worker() -> None:
+        log_path = generate_log_path()
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+
         save_generate_status({"running": True, "step": "starting", "error": None, "finished_at": None})
         try:
-            _run_full_pipeline(lambda step: save_generate_status(
-                {"running": True, "step": step, "error": None, "finished_at": None}
-            ))
+            _run_full_pipeline()
             save_generate_status(
                 {
                     "running": False,
@@ -394,11 +457,22 @@ def start_generate() -> tuple[int, dict[str, Any]]:
                 }
             )
         except Exception as exc:
+            import traceback
+
+            detail = str(exc).strip() or repr(exc)
+            tb = traceback.format_exc()
+            log_path = generate_log_path()
+            try:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(log_path, "a", encoding="utf-8") as log_file:
+                    log_file.write(f"\n{tb}\n")
+            except OSError:
+                pass
             save_generate_status(
                 {
                     "running": False,
                     "step": "failed",
-                    "error": str(exc),
+                    "error": detail,
                     "finished_at": _now_iso(),
                 }
             )
@@ -443,9 +517,46 @@ def _resolve_app_key(slug: str, stage2: dict[str, Any]) -> str | None:
 
 
 def _run_full_pipeline(progress_callback: Any = None) -> None:
-    import generate as pipeline
+    """Run pipeline in a child process so Windows HTTP server threads stay stable."""
+    script = ROOT / "ui" / "backend" / "generate.py"
+    log_path = generate_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("", encoding="utf-8")
 
-    pipeline.generate(progress_callback=progress_callback)
+    proc = subprocess.Popen(
+        [sys.executable, "-u", str(script), "--ui"],
+        cwd=str(ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+
+    with open(log_path, "a", encoding="utf-8", newline="\n") as log_file:
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                log_file.write(line)
+                log_file.flush()
+
+    returncode = proc.wait()
+    if returncode == 0:
+        return
+
+    combined = log_path.read_text(encoding="utf-8", errors="replace")
+    raise RuntimeError(_parse_generate_error(combined, log_path))
+
+
+def _parse_generate_error(stderr: str, log_path: Path) -> str:
+    for line in reversed(stderr.splitlines()):
+        line = line.strip()
+        if line.startswith("Error:"):
+            return line[6:].strip()
+        if line and not line.startswith("==="):
+            return line
+    return f"Generation failed. See {log_path.relative_to(ROOT)} for details."
 
 
 def _run_build_only() -> None:

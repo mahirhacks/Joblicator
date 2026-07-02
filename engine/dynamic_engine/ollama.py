@@ -7,10 +7,13 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 from typing import Any
+
+from utils import log_stderr
 
 
 def _ollama_settings(config: dict) -> dict[str, Any]:
@@ -116,19 +119,29 @@ def start_ollama(config: dict, *, wait_seconds: float = 45) -> None:
             f"Ollama is not reachable at {settings['base_url']} and ollama.auto_start is false."
         )
 
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError(
+            f"Ollama is not reachable at {settings['base_url']}. "
+            "Open the Ollama app (or run `ollama serve`), wait until it is ready, then click Generate again."
+        )
+
     ollama_bin = shutil.which("ollama")
     if not ollama_bin:
         raise RuntimeError(
             f"Ollama is not running at {settings['base_url']} and the `ollama` CLI was not found on PATH."
         )
 
-    print("Ollama: starting server ...", file=sys.stderr)
+    log_stderr("Ollama: starting server ...")
     popen_kwargs: dict[str, Any] = {
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        if threading.current_thread() is threading.main_thread():
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            # CREATE_NEW_PROCESS_GROUP can raise EINVAL from background threads on Windows.
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     else:
         popen_kwargs["start_new_session"] = True
 
@@ -137,7 +150,7 @@ def start_ollama(config: dict, *, wait_seconds: float = 45) -> None:
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
         if ollama_is_running(config, timeout=2):
-            print("Ollama: server ready", file=sys.stderr)
+            log_stderr("Ollama: server ready")
             return
         time.sleep(1)
 
@@ -146,6 +159,103 @@ def start_ollama(config: dict, *, wait_seconds: float = 45) -> None:
 
 def ensure_ollama_running(config: dict) -> None:
     start_ollama(config)
+
+
+def list_installed_ollama_models(config: dict) -> list[str]:
+    """Model names from GET /api/tags (includes tags like gemma4:26b)."""
+    base_url = _ollama_settings(config)["base_url"]
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Could not list Ollama models at {base_url}: {exc}") from exc
+
+    names: list[str] = []
+    for entry in data.get("models", []):
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "")).strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _model_is_available(configured: str, installed: list[str]) -> bool:
+    configured = configured.strip()
+    if not configured:
+        return False
+    if configured in installed:
+        return True
+    # Ollama tags may omit :latest; also match bare name (gemma4 vs gemma4:26b).
+    base = configured.split(":", 1)[0]
+    for name in installed:
+        if name == configured or name.split(":", 1)[0] == base:
+            return True
+    return False
+
+
+def ensure_ollama_model(config: dict) -> None:
+    """Fail fast with an actionable message if the configured model is missing."""
+    ensure_ollama_running(config)
+    model = _ollama_settings(config)["model"]
+    if not model:
+        raise ValueError("config.yaml: ollama.model is required.")
+
+    installed = list_installed_ollama_models(config)
+    if _model_is_available(model, installed):
+        return
+
+    installed_hint = ", ".join(installed[:8]) if installed else "(none — run `ollama pull`)"
+    if len(installed) > 8:
+        installed_hint += ", …"
+    raise RuntimeError(
+        f"Ollama model '{model}' is not installed. "
+        f"Run: ollama pull {model}\n"
+        f"Installed models: {installed_hint}"
+    )
+
+
+def _parse_ollama_chat_body(raw: str) -> dict[str, Any]:
+    text = raw.strip()
+    if not text:
+        return {}
+
+    if "\n" not in text:
+        return json.loads(text)
+
+    # Some Ollama builds still return NDJSON even when stream=false — keep the final chunk.
+    last: dict[str, Any] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(chunk, dict):
+            continue
+        if chunk.get("message", {}).get("content") or chunk.get("done"):
+            last = chunk
+    return last
+
+
+def _format_ollama_failure(config: dict, data: dict[str, Any], *, raw: str = "") -> str:
+    model = _ollama_settings(config)["model"]
+    if isinstance(data.get("error"), str) and data["error"].strip():
+        detail = data["error"].strip()
+    else:
+        detail = json.dumps(data, ensure_ascii=False)[:500]
+
+    hints = [
+        f"Confirm Ollama is running and the model is pulled: ollama pull {model}",
+        "Check VRAM/RAM — gemma4:26b needs ~16 GB+ at Q4 quantization",
+        "Try a smaller model in engine/dynamic_engine/config.yaml (e.g. gemma4:e4b)",
+    ]
+    if raw and "\n" in raw:
+        hints.insert(0, "Received a partial streaming response — retry, or restart Ollama")
+
+    return "Ollama returned no usable content.\n" + "\n".join(f"• {hint}" for hint in hints) + f"\n\nResponse: {detail}"
 
 
 def terminate_ollama(config: dict) -> None:
@@ -167,21 +277,19 @@ def terminate_ollama(config: dict) -> None:
             unloaded.append(model)
 
     if unloaded:
-        print(f"Ollama: unloaded model(s) from memory — {', '.join(unloaded)}", file=sys.stderr)
+        log_stderr(f"Ollama: unloaded model(s) from memory — {', '.join(unloaded)}")
     else:
-        print("Ollama: could not confirm model unload (server may still hold weights)", file=sys.stderr)
+        log_stderr("Ollama: could not confirm model unload (server may still hold weights)")
 
 
 def call_ollama(config: dict, messages: list[dict[str, str]]) -> str:
-    ensure_ollama_running(config)
+    ensure_ollama_model(config)
 
     ollama = config.get("ollama", {})
     generation = config.get("generation", {})
 
     base_url = ollama.get("base_url", "http://127.0.0.1:11434").rstrip("/")
     model = ollama.get("model", "")
-    if not model:
-        raise ValueError("config.yaml: ollama.model is required.")
 
     payload: dict[str, Any] = {
         "model": model,
@@ -192,30 +300,58 @@ def call_ollama(config: dict, messages: list[dict[str, str]]) -> str:
             "num_ctx": generation.get("context_window", 16384),
         },
     }
-    if "think" in ollama:
-        payload["think"] = ollama["think"]
+    if ollama.get("think") is True:
+        payload["think"] = True
 
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base_url}/api/chat",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    last_data: dict[str, Any] = {}
+    last_raw = ""
+    last_error: Exception | None = None
+    for attempt in range(3):
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{base_url}/api/chat",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                last_raw = response.read().decode("utf-8")
+                last_data = _parse_ollama_chat_body(last_raw)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 500 and attempt < 2:
+                last_error = exc
+                log_stderr(f"Ollama: server error (attempt {attempt + 1}/3), retrying in 5s ...")
+                time.sleep(5)
+                ensure_ollama_running(config)
+                continue
+            raise RuntimeError(f"Ollama request failed ({exc.code}): {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+            if attempt < 2:
+                log_stderr(f"Ollama: connection error (attempt {attempt + 1}/3), retrying in 3s ...")
+                time.sleep(3)
+                ensure_ollama_running(config)
+                continue
+            reason = getattr(exc, "reason", exc)
+            raise RuntimeError(f"Could not reach Ollama at {base_url}: {reason}") from exc
 
-    try:
-        with urllib.request.urlopen(request, timeout=600) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Ollama request failed ({exc.code}): {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Could not reach Ollama at {base_url}: {exc.reason}") from exc
+        content = last_data.get("message", {}).get("content", "")
+        if content:
+            return content
 
-    content = data.get("message", {}).get("content", "")
-    if not content:
-        raise RuntimeError(f"Ollama returned no content: {data}")
-    return content
+        if attempt < 2:
+            log_stderr(f"Ollama: empty response (attempt {attempt + 1}/3), retrying in 3s ...")
+            time.sleep(3)
+            ensure_ollama_running(config)
+
+    if last_error is not None:
+        raise RuntimeError(
+            _format_ollama_failure(config, last_data, raw=last_raw)
+            + f"\n\nLast connection error: {last_error}"
+        ) from last_error
+    raise RuntimeError(_format_ollama_failure(config, last_data, raw=last_raw))
 
 
 def clean_llm_json(raw: str) -> str:
