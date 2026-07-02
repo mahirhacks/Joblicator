@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ contact.name }} — CV</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 2.4cm;
+    }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.45;
+      color: #1a1a1a;
+      margin: 0;
+      padding: 0;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    td {
+      vertical-align: top;
+      padding: 0;
+    }
+    a {
+      color: #1f3a5f;
+      text-decoration: none;
+    }
+    .name {
+      font-size: 25pt;
+      font-weight: bold;
+      color: #17263b;
+      margin: 0 0 3px 0;
+      line-height: 1.15;
+    }
+    .headline {
+      font-size: 11pt;
+      font-weight: normal;
+      color: #4d5766;
+      text-transform: uppercase;
+      margin: 0;
+    }
+    .header-right {
+      font-size: 9.5pt;
+      line-height: 1.6;
+      text-align: right;
+      padding-top: 6px;
+      color: #333333;
+    }
+    .header-right p {
+      margin: 0 0 3px 0;
+    }
+    .contact-label {
+      color: #5a6472;
+      font-weight: bold;
+    }
+    .address-line {
+      color: #333333;
+    }
+    .summary {
+      margin: 40px 0 0 0;
+      text-align: justify;
+      color: #262626;
+    }
+    .section-title {
+      font-size: 10.5pt;
+      font-weight: bold;
+      color: #17263b;
+      text-transform: uppercase;
+      margin: 38px 0 12px 0;
+    }
+    .entry-row {
+      margin-top: 0;
+    }
+    .entry-row--spaced {
+      margin-top: 14px;
+    }
+    .split-left {
+      font-weight: bold;
+      font-size: 10.6pt;
+      color: #1a1a1a;
+      width: 72%;
+      padding-right: 8px;
+    }
+    .split-right {
+      font-weight: normal;
+      font-size: 9.5pt;
+      color: #5a6472;
+      width: 28%;
+      text-align: right;
+      white-space: nowrap;
+      padding-top: 1px;
+    }
+    .subtitle {
+      font-style: italic;
+      color: #444b56;
+      margin: 3px 0 6px 0;
+    }
+    .entry-body {
+      margin: 6px 0 0 0;
+      text-align: justify;
+    }
+    ul.bullets {
+      margin: 8px 0 0 0;
+      padding: 0 0 0 18px;
+      list-style-type: circle;
+    }
+    ul.bullets li {
+      margin: 0 0 7px 0;
+      padding-left: 2px;
+      text-align: justify;
+    }
+    ul.bullets li:last-child {
+      margin-bottom: 0;
+    }
+    .skills-line {
+      margin: 0 0 9px 0;
+      text-align: justify;
+    }
+    .skills-line:last-child {
+      margin-bottom: 0;
+    }
+    .skills-label {
+      font-weight: bold;
+      color: #17263b;
+    }
+    .education-school {
+      font-weight: bold;
+      font-size: 10.6pt;
+      color: #1a1a1a;
+    }
+    .education-degree {
+      margin: 6px 0 4px 0;
+      text-align: justify;
+    }
+    .education-detail {
+      margin: 3px 0;
+      text-align: justify;
+      color: #333333;
+    }
+    .cert-name {
+      font-weight: bold;
+      font-size: 10.6pt;
+      color: #1a1a1a;
+    }
+    .cert-issuer {
+      margin: 3px 0 0 0;
+      color: #444b56;
+    }
+    .cert-description {
+      margin: 2px 0 0 0;
+      color: #333;
+      font-size: 9.5pt;
+      line-height: 1.35;
+    }
+    .block-text {
+      margin: 0;
+      text-align: justify;
+    }
+  </style>
+</head>
+<body>
+  <table class="header">
+    <tr>
+      <td width="52%">
+        <p class="name">{{ contact.name }}</p>
+        {% if headline %}<p class="headline">{{ headline }}</p>{% endif %}
+      </td>
+      <td class="header-right" width="48%">
+        {% if contact.email %}
+        <p><span class="contact-label">Email:</span> <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>
+        {% endif %}
+        {% if contact.linkedin %}
+        <p><span class="contact-label">LinkedIn:</span> <a href="{{ contact.linkedin }}">{{ contact.linkedin }}</a></p>
+        {% endif %}
+        {% if contact.phone %}
+        <p><span class="contact-label">Phone:</span> {{ contact.phone }}</p>
+        {% endif %}
+        {% if contact.address %}
+        <p class="address-line"><span class="contact-label">Address:</span> {{ contact.address }}</p>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  {% if summary %}<p class="summary">{{ summary }}</p>{% endif %}
+
+  {% if work_experience %}
+  <div class="section">
+    <p class="section-title">Work Experience</p>
+    {% for job in work_experience %}
+    <div class="entry">
+      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
+        <tr>
+          <td class="split-left">{{ job.title }}</td>
+          <td class="split-right">{{ job.dates }}</td>
+        </tr>
+      </table>
+      {% if job.company_line %}<p class="subtitle">{{ job.company_line }}</p>{% endif %}
+      {% if job.points %}
+      <ul class="bullets">
+        {% for point in job.points %}<li>{{ point }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if projects %}
+  <div class="section">
+    <p class="section-title">Projects</p>
+    {% for project in projects %}
+    <div class="entry">
+      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
+        <tr>
+          <td class="split-left">{{ project.title }}</td>
+          <td class="split-right">{{ project.dates }}</td>
+        </tr>
+      </table>
+      {% if project.description %}<p class="entry-body">{{ project.description }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if volunteer %}
+  <div class="section">
+    <p class="section-title">Volunteer</p>
+    {% for item in volunteer %}
+    <div class="entry">
+      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
+        <tr>
+          <td class="split-left">{{ item.title }}</td>
+          <td class="split-right">{{ item.dates }}</td>
+        </tr>
+      </table>
+      {% if item.organization %}<p class="subtitle">{{ item.organization }}</p>{% endif %}
+      {% if item.description %}<p class="entry-body">{{ item.description }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if technical_skills or soft_skills %}
+  <div class="section">
+    <p class="section-title">Core Skills</p>
+    {% if technical_skills %}
+    <p class="skills-line"><span class="skills-label">Technical Skills:</span> {{ technical_skills }}</p>
+    {% endif %}
+    {% if soft_skills %}
+    <p class="skills-line"><span class="skills-label">Soft Skills:</span> {{ soft_skills }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if education %}
+  <div class="section">
+    <p class="section-title">Education</p>
+    {% for edu in education %}
+    <div class="entry">
+      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
+        <tr>
+          <td class="split-left education-school">{{ edu.school }}</td>
+          <td class="split-right">{{ edu.dates }}</td>
+        </tr>
+      </table>
+      {% if edu.degree_line %}
+      <p class="education-degree">
+        {% if edu.degree_lead %}<strong>{{ edu.degree_lead }}</strong>{% endif %}
+        {% if edu.degree_rest %} {{ edu.degree_rest }}{% endif %}
+      </p>
+      {% endif %}
+      {% if edu.courses %}<p class="education-detail"><strong>Courses:</strong> {{ edu.courses }}</p>{% endif %}
+      {% if edu.gpa %}<p class="education-detail"><strong>CGPA:</strong> {{ edu.gpa }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if languages %}
+  <div class="section">
+    <p class="section-title">Languages</p>
+    <p class="block-text">{{ languages }}</p>
+  </div>
+  {% endif %}
+
+  {% if certifications %}
+  <div class="section">
+    <p class="section-title">Certificates</p>
+    {% for cert in certifications %}
+    <div class="entry">
+      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
+        <tr>
+          <td class="split-left cert-name">{{ cert.title }}</td>
+          <td class="split-right">{{ cert.date }}</td>
+        </tr>
+      </table>
+      {% if cert.issuer %}<p class="cert-issuer">{{ cert.issuer }}</p>{% endif %}
+      {% if cert.description %}<p class="cert-description">{{ cert.description }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if interests %}
+  <div class="section">
+    <p class="section-title">Interests</p>
+    <p class="block-text">{{ interests }}</p>
+  </div>
+  {% endif %}
+</body>
+</html>

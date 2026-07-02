@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ contact.name }} — Cover Letter</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 2.4cm;
+    }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 10.8pt;
+      line-height: 1.55;
+      color: #1a1a1a;
+      margin: 0;
+      padding: 0;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    td {
+      vertical-align: top;
+      padding: 0;
+    }
+    a {
+      color: #1f3a5f;
+      text-decoration: none;
+    }
+    .sender-name {
+      font-size: 15pt;
+      font-weight: bold;
+      color: #17263b;
+      margin: 0 0 4px 0;
+    }
+    .sender-line {
+      font-size: 9.5pt;
+      color: #5a6472;
+      margin: 0 0 2px 0;
+    }
+    .date-cell {
+      text-align: right;
+      font-size: 9.5pt;
+      color: #5a6472;
+      padding-top: 4px;
+    }
+    .recipient {
+      margin: 44px 0 0 0;
+    }
+    .recipient p {
+      margin: 0 0 2px 0;
+    }
+    .subject {
+      font-weight: bold;
+      color: #17263b;
+      margin: 28px 0 0 0;
+    }
+    p.body-text {
+      margin: 28px 0 0 0;
+      text-align: justify;
+    }
+    .sign-off {
+      margin-top: 36px;
+    }
+    .sign-off .line {
+      margin: 0 0 3px 0;
+    }
+  </style>
+</head>
+<body>
+  <table>
+    <tr>
+      <td width="60%">
+        <p class="sender-name">{{ contact.name }}</p>
+        {% if contact.address %}<p class="sender-line">{{ contact.address }}</p>{% endif %}
+        {% if contact.email %}<p class="sender-line">{{ contact.email }}</p>{% endif %}
+        {% if contact.phone %}<p class="sender-line">{{ contact.phone }}</p>{% endif %}
+        {% if contact.linkedin %}<p class="sender-line">{{ contact.linkedin }}</p>{% endif %}
+      </td>
+      <td class="date-cell" width="40%">
+        {% if date %}{{ date }}{% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <div class="recipient">
+    <p>{{ addressee }}</p>
+    {% if company_name %}<p>{{ company_name }}</p>{% endif %}
+  </div>
+
+  {% if subject_line %}
+  <div class="subject">{{ subject_line }}</div>
+  {% endif %}
+
+  {% if opening_paragraph %}<p class="body-text">{{ opening_paragraph }}</p>{% endif %}
+  {% for paragraph in body_paragraphs %}<p class="body-text">{{ paragraph }}</p>{% endfor %}
+  {% if closing_paragraph %}<p class="body-text">{{ closing_paragraph }}</p>{% endif %}
+
+  <div class="sign-off">
+    {% for line in sign_off_lines %}
+    <p class="line">{{ line }}</p>
+    {% endfor %}
+  </div>
+</body>
+</html>

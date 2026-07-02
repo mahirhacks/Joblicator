@@ -1,0 +1,183 @@
+"""
+Static engine — assemble stage_2 + stage_3 into PDF documents.
+
+Run from project root:
+    python engine/static_engine/build.py
+
+Outputs CV and cover letter PDFs per application to the directory in
+settings/template.json (default: outputs/).
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+ENGINE_DIR = Path(__file__).resolve().parent
+if str(ENGINE_DIR) not in sys.path:
+    sys.path.insert(0, str(ENGINE_DIR))
+
+DYNAMIC_DIR = ENGINE_DIR.parent / "dynamic_engine"
+if str(DYNAMIC_DIR) not in sys.path:
+    sys.path.insert(0, str(DYNAMIC_DIR))
+
+from loader import (  # noqa: E402
+    list_application_keys,
+    load_engine_config,
+    load_stage_2,
+    load_stage_3,
+    load_template_settings,
+    resolve_template_path,
+    split_header_and_application,
+)
+from normalizer import build_cover_letter_context, build_cv_context  # noqa: E402
+from renderer import render_html, safe_filename_part, write_html, write_pdf  # noqa: E402
+from verification import (  # noqa: E402
+    assert_application_parser_passed,
+    assert_pipeline_not_failed,
+    default_failure_report_path,
+)
+
+PROJECT_ROOT = ENGINE_DIR.parent.parent
+
+
+def _export_settings(template_settings: dict[str, Any]) -> dict[str, Any]:
+    return template_settings.get("export", {})
+
+
+def _output_dir(template_settings: dict[str, Any]) -> Path:
+    rel = str(_export_settings(template_settings).get("output_dir", "outputs"))
+    return (PROJECT_ROOT / rel).resolve()
+
+
+def _build_filename_stem(
+    template_settings: dict[str, Any],
+    company: str,
+    role: str,
+) -> str:
+    export = _export_settings(template_settings)
+    pattern = str(export.get("filename_pattern", "{company}_{role}_{date}"))
+    date_fmt = str(export.get("date_format", "%Y%m%d"))
+    if date_fmt == "YYYYMMDD":
+        date_fmt = "%Y%m%d"
+    today = datetime.now().strftime(date_fmt)
+    values = {
+        "company": safe_filename_part(company, "company"),
+        "role": safe_filename_part(role, "role"),
+        "date": today,
+    }
+    stem = pattern.format(**values)
+    return re.sub(r"_+", "_", stem).strip("_")
+
+
+def _formats(template_settings: dict[str, Any]) -> list[str]:
+    formats = _export_settings(template_settings).get("formats", ["pdf"])
+    if not isinstance(formats, list):
+        return ["pdf"]
+    return [str(item).lower() for item in formats]
+
+
+def build_application_documents(
+    app_key: str,
+    header: dict[str, Any],
+    resume: dict[str, Any],
+    letter: dict[str, Any],
+    template_settings: dict[str, Any],
+    cv_template_id: str | None = None,
+    cover_template_id: str | None = None,
+) -> dict[str, Path]:
+    defaults = template_settings.get("defaults", {})
+    cv_template_id = cv_template_id or str(defaults.get("cv", "cv_professional"))
+    cover_template_id = cover_template_id or str(defaults.get("cover_letter", "cover_letter_formal"))
+
+    company = str(letter.get("company_name") or resume.get("company_name") or "company")
+    role = str(letter.get("role_title") or resume.get("role_title") or app_key)
+    stem = _build_filename_stem(template_settings, company, role)
+    out_dir = _output_dir(template_settings) / stem
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cv_context = build_cv_context(header, resume)
+    letter_context = build_cover_letter_context(header, letter)
+
+    cv_template = resolve_template_path(template_settings, cv_template_id)
+    cover_template = resolve_template_path(template_settings, cover_template_id)
+
+    outputs: dict[str, Path] = {}
+    formats = _formats(template_settings)
+
+    cv_html = render_html(cv_template, cv_context)
+    cover_html = render_html(cover_template, letter_context)
+
+    write_html(cv_html, out_dir / f"{stem}_cv.html")
+    write_html(cover_html, out_dir / f"{stem}_cover_letter.html")
+    outputs["cv_html"] = out_dir / f"{stem}_cv.html"
+    outputs["cover_html"] = out_dir / f"{stem}_cover_letter.html"
+
+    if "pdf" in formats:
+        outputs["cv_pdf"] = write_pdf(cv_html, out_dir / f"{stem}_cv.pdf")
+        outputs["cover_pdf"] = write_pdf(cover_html, out_dir / f"{stem}_cover_letter.pdf")
+
+    return outputs
+
+
+def run() -> list[dict[str, Any]]:
+    config = load_engine_config()
+    template_settings = load_template_settings()
+    stage2 = load_stage_2(config)
+    stage3 = load_stage_3(config)
+
+    failure_report = default_failure_report_path()
+    if failure_report.is_file():
+        import json
+
+        report = json.loads(failure_report.read_text(encoding="utf-8"))
+        if report.get("pipeline_status") == "FAILED":
+            stage = report.get("stage", "unknown stage")
+            app_key = report.get("application", "unknown application")
+            raise RuntimeError(
+                f"Refusing to build — upstream {stage} failed for {app_key}. "
+                f"See {failure_report} for details."
+            )
+
+    if not stage2:
+        raise ValueError("stage_2.json is empty — run stage_2.py first")
+    if not stage3:
+        raise ValueError("stage_3.json is empty — run stage_3.py first")
+
+    assert_pipeline_not_failed(stage2, label="stage_2.json")
+    assert_pipeline_not_failed(stage3, label="stage_3.json")
+
+    results: list[dict[str, Any]] = []
+    for app_key in list_application_keys(stage2):
+        if app_key not in stage3:
+            print(f"Warning: skipping {app_key} — missing in stage_3.json", file=sys.stderr)
+            continue
+
+        header, resume = split_header_and_application(stage2, app_key)
+        _, letter = split_header_and_application(stage3, app_key)
+        assert_application_parser_passed(app_key, resume, stage_label="Stage 2")
+        assert_application_parser_passed(app_key, letter, stage_label="Stage 3")
+        outputs = build_application_documents(app_key, header, resume, letter, template_settings)
+        results.append({"application": app_key, "outputs": outputs})
+        print(f"Built {app_key} -> {outputs.get('cv_pdf', outputs.get('cv_html'))}", file=sys.stderr)
+
+    if not results:
+        raise ValueError("No application documents were built")
+    return results
+
+
+def main() -> None:
+    try:
+        results = run()
+    except (FileNotFoundError, ValueError, ImportError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    print(f"Static build complete: {len(results)} application(s) -> {_output_dir(load_template_settings())}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,12 +1,64 @@
+# --- Local user data (never commit) ---
 applications/local_applications.json
-engine/dynamic_engine/data/*
+applications/local_*.json
 
 settings/local_profile.json
 settings/local_scanner.json
 settings/local_template.json
+settings/local_*.json
 
-ui/frontend/dist/*
-ui/frontend/node_modules/*
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
+secrets.json
+
+# --- Pipeline generated artifacts ---
+engine/dynamic_engine/data/
+engine/dynamic_engine/data/**
+
+outputs/
+outputs/**
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+*.log
+
+# --- Node / frontend ---
+ui/frontend/node_modules/
+ui/frontend/dist/
+ui/frontend/.vite/
 ui/frontend/package-lock.json
 
-.cursor/*
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.cursor/
+.cursor/**
+
+# --- Debug / scratch ---
+*.tmp
+*.bak
+*.swp
+*~

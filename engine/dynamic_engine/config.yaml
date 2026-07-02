@@ -2,12 +2,13 @@
 
 ollama:
   base_url: http://127.0.0.1:11434
-  model: qwen3.5:9b
+  model: gemma4:26b
   think: false
+  auto_start: true
 
 generation:
   temperature: 0.5
-  context_window: 32768
+  context_window: 8192
 
 applications:
   json: applications/local_applications.json
@@ -15,17 +16,51 @@ applications:
 profile:
   json: settings/local_profile.json
 
-batching:
-  max_chars: 1200
-
 loops:
-  max_keywords_per_section: 20
-  max_keywords_per_inter_batch: 5
+  max_keywords_total: 30
 
 stages:
-  stage1_cv: engine/dynamic_engine/1_stage_req_cv.json
-  stage1_letter: engine/dynamic_engine/1_stage_req_letter.json
-  stage2_cv: engine/dynamic_engine/2_stage_cv.json
-  stage2_cv_p1: engine/dynamic_engine/2_stage_cv_p1.json
-  stage3_letter: engine/dynamic_engine/3_stage_letter.json
-  letter_body_paragraphs: 3
+  stage_1: engine/dynamic_engine/data/stage_1.json
+  stage_2: engine/dynamic_engine/data/stage_2.json
+  stage_3: engine/dynamic_engine/data/stage_3.json
+
+stage_2:
+  keywords:
+    max_original_keyword: 7
+    max_synonym_keyword_per_original_keyword: 2
+  grounding:
+    skills_from_profile_only: true
+    enforce_claims_manifest: true
+  skills:
+    domain_count: 5
+    subskill_min: 1
+    subskill_max: 3
+  certifications:
+    description_min_chars: 24
+  style_verification:
+    enabled: true
+  verification:
+    enabled: true
+    min_quality: 7
+    max_passes: 4
+  parser_verification:
+    enabled: true
+    max_passes: 3
+
+stage_3:
+  body_paragraphs: 2
+  body_paragraph:
+    max_words: 120
+  honesty:
+    use_stage_2_claims: true
+    deterministic_gap_paragraph: true
+    gap_paragraph_index: 2
+  style_verification:
+    enabled: true
+  verification:
+    enabled: true
+    min_quality: 7
+    max_passes: 3
+  parser_verification:
+    enabled: true
+    max_passes: 2
