@@ -10,16 +10,19 @@ Nothing runs in the cloud by default: your profile, applications, generated arti
 |------|-----------------|
 | **Profile** | Edit contact info, experience, education, skills, and custom sections in a structured form |
 | **Jobs** | Add roles via URL scrape or pasted description; store company, title, location, and full job text |
-| **Applications** | Track status, generate documents for all jobs, select/delete entries, open outputs |
-| **Templates** | Photoshop-style layout editor for CV sections (layers, typography, grid, snap, pan/zoom) |
+| **Applications** | Filter by status, generate per mode (full pipeline or individual stages), select/delete entries, track pipeline phases, live generation log |
+| **Templates** | Layer-based layout editor for CV sections (typography, grid, snap, pan/zoom) |
 | **Review** | Preview HTML/PDF, edit stage JSON, rebuild exports |
+| **Settings** | Edit `engine/dynamic_engine/config.yaml` in the UI (Ollama model, stage options, verification); switch light/dark theme |
+
+The UI uses a minimal industrial design (square corners, hairline borders, uppercase micro-labels) with an optional dark theme stored in browser `localStorage`.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  React UI (ui/frontend)          http://localhost:8080        │
-│  Profile · Jobs · Applications · Templates · Review         │
+│  React UI (ui/frontend)          http://localhost:8080    │
+│  Profile · Jobs · Applications · Templates · Review · Settings │
 └──────────────────────────┬──────────────────────────────────┘
                            │ REST API
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -79,7 +82,7 @@ npm run build
 cd ../..
 ```
 
-The build copies assets into `ui/frontend/` so the Python server can serve them.
+`npm run build` writes to `ui/frontend/dist/` and copies `index.html` plus hashed bundles into `ui/frontend/` for the Python server. These build artifacts are gitignored—you must run this step after clone or UI changes.
 
 ### 3. Create local data files
 
@@ -90,7 +93,7 @@ These paths are gitignored—you need your own copies:
 | `settings/local_profile.json` | Your CV/profile data (start from `settings/profile.json` or create via the Profile UI) |
 | `applications/local_applications.json` | Saved job postings (`{}` or add jobs through the Jobs UI) |
 
-`engine/dynamic_engine/config.yaml` already points at these local paths.
+`engine/dynamic_engine/config.yaml` already points at these local paths. You can also edit engine settings from **Settings** in the UI.
 
 ### 4. Start Ollama
 
@@ -100,7 +103,7 @@ Ensure Ollama is running and the model in `config.yaml` is pulled:
 ollama pull gemma4:26b
 ```
 
-Adjust `engine/dynamic_engine/config.yaml` if you use a different model.
+Adjust the model in **Settings** or edit `engine/dynamic_engine/config.yaml` directly.
 
 ### 5. Run the UI
 
@@ -116,9 +119,10 @@ Open [http://localhost:8080](http://localhost:8080).
 
 1. **Profile** — Fill in your experience, education, skills, and contact details.
 2. **Jobs** — Paste a job URL or description; save the role.
-3. **Applications** — Click **Generate all** to run the full pipeline (Stage 1 → 2 → 3 → PDF build).
+3. **Applications** — Choose generation mode and output type, then **Generate all** (or select specific jobs). Watch the generation log at the bottom of the page.
 4. **Review** — Preview CV and cover letter, tweak JSON if needed, **Save & export PDF**.
-5. **Templates** (optional) — Adjust layout/typography for document templates.
+5. **Templates** (optional) — Adjust layout and typography for document templates.
+6. **Settings** (optional) — Tune pipeline options or switch light/dark theme.
 
 ## Pipeline (CLI)
 
@@ -141,10 +145,12 @@ Stage outputs are written to `engine/dynamic_engine/data/` (gitignored). Final H
 
 | File | Description |
 |------|-------------|
-| `engine/dynamic_engine/config.yaml` | Ollama URL/model, profile & applications paths, stage options, verification settings |
+| `engine/dynamic_engine/config.yaml` | Ollama URL/model, profile & applications paths, stage options, verification settings (editable in **Settings**) |
 | `settings/template.json` | Default CV/cover letter template IDs and output naming |
 | `settings/local_profile.json` | Your profile (local, not committed) |
 | `applications/local_applications.json` | Your job records (local, not committed) |
+
+UI theme preference (`light` / `dark`) is stored in browser `localStorage` under `joblication.theme` and is not part of engine config.
 
 ## Project layout
 
@@ -159,7 +165,7 @@ Joblication/
 ├── templates/             # Jinja2 CV and cover letter templates
 ├── ui/
 │   ├── backend/           # HTTP server, API handlers, generate wrapper
-│   └── frontend/          # React + Vite source and built assets
+│   └── frontend/          # React + Vite source (src/); built assets gitignored
 └── requirements.txt
 ```
 
@@ -170,14 +176,18 @@ The UI talks to a small REST API on port **8080**:
 - `GET/PUT /api/profile` — profile JSON
 - `GET/POST/PUT/DELETE /api/applications` — jobs
 - `GET /api/applications/view` — jobs with output metadata
-- `POST /api/generate` — start full pipeline (background thread)
+- `POST /api/generate` — start pipeline (background thread)
 - `GET /api/generate/status` — pipeline progress
+- `GET /api/generate/log` — streaming generation log (offset query param)
+- `GET/PUT /api/engine-config` — read/write `config.yaml` from Settings
 - `GET/PUT /api/review/:slug` — stage 2/3 JSON + output files
 - `POST /api/build/:slug` — rebuild PDFs after review edits
 - `GET/PUT /api/templates/:id` — template catalog + custom layouts
 - `GET /api/files/:folder/:filename` — serve output HTML/PDF for preview
 
 ## Frontend development
+
+Source lives in `ui/frontend/src/`. Global styles are in `src/GlobalStyles.jsx` (CSS custom properties, light/dark via `data-theme` on `<html>`).
 
 For hot reload during UI work:
 
@@ -186,7 +196,7 @@ cd ui/frontend
 npm run dev
 ```
 
-Vite dev server proxies API calls, or run `python ui/backend/server.py` separately and configure Vite proxy in `vite.config.js` if needed.
+Vite dev server proxies `/api` to `http://127.0.0.1:8080` (see `vite.config.js`). Run `python ui/backend/server.py` in another terminal.
 
 Production build (what the Python server serves):
 
@@ -199,20 +209,33 @@ npm run build
 The following are **never committed** (see `.gitignore`):
 
 - `settings/local_profile.json` and other `local_*` settings
-- `applications/local_applications.json`
-- `engine/dynamic_engine/data/` (stage outputs)
+- `applications/local_applications.json` and other `local_*` application data
+- `engine/dynamic_engine/data/` (stage outputs, generation log, status)
 - `outputs/` (built documents)
-- `.env`, credentials, virtualenvs, `node_modules`
+- `ui/frontend/assets/` and `ui/frontend/index.html` (frontend build output)
+- `ui/frontend/dist/` and `node_modules/`
+- `.env`, credentials, virtualenvs
+
+If you previously had old hashed bundles tracked in git, remove them with:
+
+```bash
+git rm -r --cached ui/frontend/assets/
+git rm --cached ui/frontend/index.html
+```
+
+Then rebuild the frontend.
 
 ## Troubleshooting
 
 | Issue | Things to check |
 |-------|-----------------|
 | Empty profile / no jobs | Create `settings/local_profile.json` and `applications/local_applications.json` |
-| Generation fails immediately | Ollama running? Model pulled? See `engine/dynamic_engine/config.yaml` |
+| Generation fails immediately | Ollama running? Model pulled? Check **Settings** or `engine/dynamic_engine/config.yaml` |
 | Review preview empty | Run **Generate all** first; output folder must match job slug via stage 3 metadata |
-| White UI page | Rebuild frontend (`npm run build`); hard-refresh browser |
+| White / blank UI page | Run `cd ui/frontend && npm run build` from project root; hard-refresh browser |
+| Stale UI after pull | Rebuild frontend; old `assets/index-*.js` files are not kept in git |
 | PDF build errors | `xhtml2pdf` installed; check template HTML in `templates/` |
+| Theme flashes wrong on load | `src/index.html` includes an inline script that reads `joblication.theme` before React mounts |
 
 ## License
 

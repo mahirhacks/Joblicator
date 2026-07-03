@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useToast } from "../components/Toast.jsx";
+import GenerationLog from "../components/GenerationLog.jsx";
 import ResizableSidebar from "../components/ResizableSidebar.jsx";
 import PageLoading, { EmptyState } from "../components/PageLoading.jsx";
-import { IconApplications, IconExternal, IconFile, IconSpark } from "../components/icons.jsx";
+import { IconApplications, IconSpark } from "../components/icons.jsx";
 
 const STATUSES = [
   { value: "unsubmitted", label: "Unsubmitted" },
@@ -12,6 +13,56 @@ const STATUSES = [
   { value: "interview", label: "Interview" },
   { value: "accepted", label: "Accepted" },
   { value: "rejected", label: "Rejected" },
+];
+
+const STEP_LABELS = {
+  starting: "Starting",
+  stage_1: "Stage 1 — keywords & tailoring",
+  stage_2: "Stage 2 — tailored resume",
+  stage_3: "Stage 3 — cover letter",
+  build: "Static build — CV & cover letter PDFs",
+  complete: "Complete",
+  failed: "Failed",
+};
+
+const GENERATE_MODES = [
+  { id: "full", label: "Full pipeline", fromStage: "stage_1", onlyStage: null },
+  { id: "stage_1", label: "Stage 1 only", fromStage: "stage_1", onlyStage: "stage_1" },
+  { id: "from_2", label: "From stage 2", fromStage: "stage_2", onlyStage: null },
+  { id: "from_3", label: "From stage 3", fromStage: "stage_3", onlyStage: null },
+  { id: "build", label: "Build only", fromStage: "build", onlyStage: null },
+];
+
+const BUILD_OUTPUT_OPTIONS = [
+  { id: "both", label: "CV + Cover letter" },
+  { id: "cv", label: "CV / Resume only" },
+  { id: "letter", label: "Cover letter only" },
+];
+
+/** CV-only builds skip stage 3, so full pipeline and from stage 3 are not offered. */
+const PIPELINE_MODE_IDS_BY_BUILD = {
+  both: new Set(["full", "stage_1", "from_2", "from_3", "build"]),
+  cv: new Set(["stage_1", "from_2", "build"]),
+  letter: new Set(["full", "stage_1", "from_2", "from_3", "build"]),
+};
+
+function pipelineModesForBuildOutput(buildOutput) {
+  const allowed = PIPELINE_MODE_IDS_BY_BUILD[buildOutput] || PIPELINE_MODE_IDS_BY_BUILD.both;
+  return GENERATE_MODES.filter((mode) => allowed.has(mode.id));
+}
+
+function buildOutputsForMode(mode) {
+  if (mode.fromStage === "stage_3") {
+    return BUILD_OUTPUT_OPTIONS.filter((opt) => opt.id !== "cv");
+  }
+  return BUILD_OUTPUT_OPTIONS;
+}
+
+const PHASES = [
+  { key: "stage_1", label: "S1" },
+  { key: "stage_2", label: "S2" },
+  { key: "stage_3", label: "S3" },
+  { key: "build", label: "Build" },
 ];
 
 function statusCounts(apps) {
@@ -31,6 +82,83 @@ function statusCounts(apps) {
   return counts;
 }
 
+function outputBadgeLabel(phases) {
+  if (!phases) return "Awaiting generation";
+  if (phases.build) return "Build ready";
+  if (phases.stage_3) return "Stage 3 done";
+  if (phases.stage_2) return "Stage 2 done";
+  if (phases.stage_1) return "Stage 1 done";
+  return "Not started";
+}
+
+function modePrerequisitesMet(mode, phases, buildOutput) {
+  if (!phases) return mode.fromStage === "stage_1";
+  if (mode.fromStage === "stage_1") return true;
+  if (mode.fromStage === "stage_2") return phases.stage_1;
+  if (mode.fromStage === "stage_3") {
+    if (buildOutput === "cv") return false;
+    return phases.stage_1 && phases.stage_2;
+  }
+  if (mode.fromStage === "build") {
+    if (buildOutput === "cv") return phases.stage_1 && phases.stage_2;
+    if (buildOutput === "letter") return phases.stage_1 && phases.stage_2 && phases.stage_3;
+    return phases.stage_1 && phases.stage_2 && phases.stage_3;
+  }
+  return false;
+}
+
+function PipelineModeSelect({ value, onChange, buildOutput }) {
+  const modes = pipelineModesForBuildOutput(buildOutput);
+  return (
+    <select
+      className="ps-select applications-stage-select"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="Generation mode"
+    >
+      {modes.map((mode) => (
+        <option key={mode.id} value={mode.id}>
+          {mode.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function BuildOutputSelect({ value, onChange, mode }) {
+  const options = buildOutputsForMode(mode);
+  return (
+    <select
+      className="ps-select applications-build-select"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="Documents to build"
+    >
+      {options.map((opt) => (
+        <option key={opt.id} value={opt.id}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function PhaseChips({ phases }) {
+  const data = phases || {};
+  return (
+    <div className="application-phases" aria-label="Pipeline phases">
+      {PHASES.map((phase, index) => (
+        <span key={phase.key} className="application-phase-group">
+          {index > 0 && <span className="application-phase-sep" aria-hidden="true">·</span>}
+          <span className={`application-phase-chip ${data[phase.key] ? "done" : "pending"}`}>
+            {phase.label}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function ApplicationCard({
   app,
   selectMode,
@@ -41,6 +169,8 @@ function ApplicationCard({
   function handleCardClick() {
     if (selectMode) onToggleSelect(app.slug);
   }
+
+  const badgeLabel = outputBadgeLabel(app.phases);
 
   return (
     <article
@@ -80,12 +210,13 @@ function ApplicationCard({
       <div className="application-card-inner">
         <header className="application-card-header">
           <h3>{app.title || app.slug}</h3>
+          {app.company && <p className="application-card-company">{app.company}</p>}
           <p className="application-card-slug">{app.slug}</p>
         </header>
 
         <div className="application-card-meta">
-          <span className={`output-badge ${app.has_output ? "ready" : "pending"}`}>
-            {app.has_output ? "Documents ready" : "Awaiting generation"}
+          <span className={`output-badge ${app.phases?.build ? "ready" : "pending"}`}>
+            {badgeLabel}
           </span>
           {!selectMode && (
             <select
@@ -105,25 +236,8 @@ function ApplicationCard({
         </div>
 
         <div className="application-card-body">
-          {app.has_output ? (
-            <ul className="application-files">
-              {app.files.map((file) => (
-                <li key={file}>
-                  <a
-                    href={api.fileUrl(app.output_folder, file)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="application-file-link"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <IconFile />
-                    <span>{file.replace(/.*\//, "")}</span>
-                    <IconExternal />
-                  </a>
-                </li>
-              ))}
-            </ul>
-          ) : (
+          <PhaseChips phases={app.phases} />
+          {!app.phases?.build && (
             <p className="application-hint">Generate to create CV and cover letter for this role.</p>
           )}
         </div>
@@ -153,6 +267,8 @@ export default function ApplicationsPage() {
   const [filter, setFilter] = useState("all");
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
+  const [generateMode, setGenerateMode] = useState("full");
+  const [buildOutput, setBuildOutput] = useState("both");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -216,6 +332,35 @@ export default function ApplicationsPage() {
   }, [apps, filter]);
 
   const selectedCount = selected.size;
+  const activeMode = GENERATE_MODES.find((m) => m.id === generateMode) || GENERATE_MODES[0];
+  const showsBuildOutput = !activeMode.onlyStage;
+  const availableBuildOutputs = useMemo(() => buildOutputsForMode(activeMode), [activeMode]);
+
+  const selectedApps = useMemo(
+    () => apps.filter((app) => selected.has(app.slug)),
+    [apps, selected]
+  );
+
+  const canRunMode = useMemo(() => {
+    if (!selectedCount) {
+      return apps.some((app) => modePrerequisitesMet(activeMode, app.phases, buildOutput));
+    }
+    return selectedApps.every((app) => modePrerequisitesMet(activeMode, app.phases, buildOutput));
+  }, [activeMode, apps, selectedApps, selectedCount, buildOutput]);
+
+  useEffect(() => {
+    const modes = pipelineModesForBuildOutput(buildOutput);
+    if (!modes.some((mode) => mode.id === generateMode)) {
+      setGenerateMode(modes[0]?.id ?? "stage_1");
+    }
+  }, [buildOutput, generateMode]);
+
+  useEffect(() => {
+    if (!showsBuildOutput) return;
+    if (!availableBuildOutputs.some((opt) => opt.id === buildOutput)) {
+      setBuildOutput(availableBuildOutputs[0]?.id ?? "both");
+    }
+  }, [generateMode, showsBuildOutput, availableBuildOutputs, buildOutput]);
 
   function exitSelectMode() {
     setSelectMode(false);
@@ -240,10 +385,19 @@ export default function ApplicationsPage() {
     }
   }
 
-  async function runGenerate() {
+  async function runGenerate(slugs = null) {
+    if (!canRunMode) {
+      showToast("Selected jobs do not meet prerequisites for this generation mode", "error");
+      return;
+    }
     setGenerating(true);
     try {
-      const result = await api.startGenerate();
+      const result = await api.startGenerate({
+        fromStage: activeMode.fromStage,
+        onlyStage: activeMode.onlyStage,
+        slugs,
+        buildTargets: buildOutput,
+      });
       if (result.alreadyRunning) {
         showToast("Generation already in progress");
       }
@@ -256,12 +410,7 @@ export default function ApplicationsPage() {
 
   async function runGenerateSelected() {
     if (!selectedCount) return;
-    showToast(
-      selectedCount === 1
-        ? "Starting generation for 1 application"
-        : `Starting generation (${selectedCount} selected)`
-    );
-    await runGenerate();
+    await runGenerate([...selected]);
   }
 
   async function deleteSelected() {
@@ -298,6 +447,8 @@ export default function ApplicationsPage() {
     ...STATUSES.map((s) => ({ key: s.value, label: s.label, count: counts[s.value] })),
   ];
 
+  const stepLabel = genStatus?.step ? STEP_LABELS[genStatus.step] || genStatus.step : "";
+
   if (loading) {
     return (
       <div className="profile-page">
@@ -308,8 +459,8 @@ export default function ApplicationsPage() {
 
   return (
     <div className="profile-page applications-page">
-      <div className="profile-layout">
-        <main className="profile-main">
+      <div className="profile-layout applications-layout">
+        <main className="profile-main applications-main">
           <div className="profile-main-inner applications-main-inner">
             <div className="applications-page-header">
               <h1>Applications</h1>
@@ -318,50 +469,77 @@ export default function ApplicationsPage() {
 
             {apps.length > 0 && (
               <div className={`applications-toolbar ${selectMode ? "selecting" : ""}`}>
-                {!selectMode ? (
-                  <>
+                <div className="applications-toolbar-start">
+                  {!selectMode ? (
                     <button type="button" className="md-outlined-btn" onClick={() => setSelectMode(true)}>
                       Select
                     </button>
-                    <div className="applications-toolbar-spacer" />
+                  ) : (
+                    <>
+                      <button type="button" className="md-outlined-btn" onClick={exitSelectMode}>
+                        Cancel
+                      </button>
+                      <span className="applications-selection-count">
+                        {selectedCount ? `${selectedCount} selected` : "Select applications"}
+                      </span>
+                    </>
+                  )}
+                </div>
+                <div className="applications-toolbar-divider" aria-hidden="true" />
+                <div className="applications-toolbar-controls">
+                  <label className="applications-toolbar-field">
+                    <span className="applications-toolbar-label">Mode</span>
+                    <PipelineModeSelect
+                      value={generateMode}
+                      onChange={setGenerateMode}
+                      buildOutput={buildOutput}
+                    />
+                  </label>
+                  {showsBuildOutput && (
+                    <label className="applications-toolbar-field">
+                      <span className="applications-toolbar-label">Output</span>
+                      <BuildOutputSelect
+                        value={buildOutput}
+                        onChange={setBuildOutput}
+                        mode={activeMode}
+                      />
+                    </label>
+                  )}
+                </div>
+                <div className="applications-toolbar-spacer" />
+                <div className="applications-toolbar-actions">
+                  {!selectMode ? (
                     <button
                       type="button"
                       className="md-filled-btn applications-toolbar-primary"
-                      onClick={runGenerate}
-                      disabled={generating}
+                      onClick={() => runGenerate(null)}
+                      disabled={generating || !canRunMode}
                     >
                       <IconSpark />
-                      {generating ? `Generating… ${genStatus?.step || ""}` : "Generate all"}
+                      {generating ? `Generating… ${stepLabel}` : "Generate all"}
                     </button>
-                  </>
-                ) : (
-                  <>
-                    <button type="button" className="md-outlined-btn" onClick={exitSelectMode}>
-                      Cancel
-                    </button>
-                    <span className="applications-selection-count">
-                      {selectedCount ? `${selectedCount} selected` : "Select applications"}
-                    </span>
-                    <div className="applications-toolbar-spacer" />
-                    <button
-                      type="button"
-                      className="md-filled-btn applications-toolbar-primary"
-                      onClick={runGenerateSelected}
-                      disabled={!selectedCount || generating}
-                    >
-                      <IconSpark />
-                      {generating ? "Generating…" : `Generate${selectedCount ? ` (${selectedCount})` : ""}`}
-                    </button>
-                    <button
-                      type="button"
-                      className="md-outlined-btn applications-toolbar-danger"
-                      onClick={deleteSelected}
-                      disabled={!selectedCount}
-                    >
-                      Delete{selectedCount ? ` (${selectedCount})` : ""}
-                    </button>
-                  </>
-                )}
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="md-filled-btn applications-toolbar-primary"
+                        onClick={runGenerateSelected}
+                        disabled={!selectedCount || generating || !canRunMode}
+                      >
+                        <IconSpark />
+                        {generating ? "Generating…" : `Generate${selectedCount ? ` (${selectedCount})` : ""}`}
+                      </button>
+                      <button
+                        type="button"
+                        className="md-outlined-btn applications-toolbar-danger"
+                        onClick={deleteSelected}
+                        disabled={!selectedCount}
+                      >
+                        Delete{selectedCount ? ` (${selectedCount})` : ""}
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             )}
 
@@ -372,7 +550,7 @@ export default function ApplicationsPage() {
                 </div>
                 <p>
                   Running pipeline
-                  {genStatus?.step ? ` — ${genStatus.step}` : "…"}
+                  {stepLabel ? ` — ${stepLabel}` : "…"}
                 </p>
               </div>
             )}
@@ -409,6 +587,8 @@ export default function ApplicationsPage() {
               </div>
             )}
           </div>
+
+          <GenerationLog />
         </main>
 
         <ResizableSidebar className="profile-sidebar applications-sidebar" storageKey="joblication.sidebar.applications">

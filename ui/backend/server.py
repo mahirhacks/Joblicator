@@ -108,6 +108,9 @@ class JoblicationHandler(BaseHTTPRequestHandler):
         if parts == ["api", "config"]:
             self._respond(*handlers.config_info())
             return True
+        if parts == ["api", "engine-config"]:
+            self._respond(*handlers.get_engine_config())
+            return True
         if parts == ["api", "profile"]:
             self._respond(*handlers.get_profile())
             return True
@@ -122,6 +125,11 @@ class JoblicationHandler(BaseHTTPRequestHandler):
             return True
         if parts == ["api", "outputs"]:
             self._respond(*handlers.list_outputs())
+            return True
+        if len(parts) == 4 and parts[1] == "review" and parts[3] == "html":
+            params = self._query_params()
+            doc = params.get("doc", ["cv"])[0]
+            self._respond(*handlers.get_review_html(parts[2], doc))
             return True
         if len(parts) == 3 and parts[1] == "review":
             self._respond(*handlers.get_review(parts[2]))
@@ -170,10 +178,11 @@ class JoblicationHandler(BaseHTTPRequestHandler):
             self._respond(*handlers.scrape_job_url(body))
             return True
         if parts == ["api", "generate"]:
-            self._respond(*handlers.start_generate())
+            self._respond(*handlers.start_generate(body))
             return True
         if len(parts) == 3 and parts[1] == "build":
-            self._respond(*handlers.rebuild_application(parts[2]))
+            body = self._read_body()
+            self._respond(*handlers.rebuild_application(parts[2], body))
             return True
         if parts == ["api", "templates"]:
             template_id = str(body.get("id", "")).strip() or "custom_" + str(int(__import__("time").time()))
@@ -188,8 +197,14 @@ class JoblicationHandler(BaseHTTPRequestHandler):
         if parts == ["api", "profile"]:
             self._respond(*handlers.put_profile(body))
             return True
+        if parts == ["api", "engine-config"]:
+            self._respond(*handlers.put_engine_config(body))
+            return True
         if len(parts) == 3 and parts[1] == "applications":
             self._respond(*handlers.update_job(parts[2], body))
+            return True
+        if len(parts) == 4 and parts[1] == "review" and parts[3] == "html":
+            self._respond(*handlers.put_review_html(parts[2], body))
             return True
         if len(parts) == 3 and parts[1] == "review":
             self._respond(*handlers.put_review(parts[2], body))

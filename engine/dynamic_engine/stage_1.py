@@ -46,6 +46,7 @@ from utils import (
     ensure_project_path,
     export_json,
     is_duplicate_keyword,
+    iter_applications,
     load_config,
     load_json,
     profile_for_prompt,
@@ -365,8 +366,7 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
     existing = _load_existing_stage1(out_path)
 
     updates: dict[str, Any] = {}
-    for index, (slug, application) in enumerate(applications.items(), start=1):
-        app_key = _application_key(index)
+    for index, app_key, slug, application in iter_applications(applications):
         updates[app_key] = process_application(
             config, app_key, slug, application, profile, section_caps
         )

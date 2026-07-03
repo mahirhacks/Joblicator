@@ -5,6 +5,7 @@ import {
   IconLogo,
   IconProfile,
   IconReview,
+  IconSettings,
   IconTemplates,
 } from "./icons.jsx";
 
@@ -46,7 +47,15 @@ export default function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <p>Tailored CVs &amp; cover letters</p>
+        <NavLink
+          to="/settings"
+          className={({ isActive }) => `sidebar-link sidebar-footer-link ${isActive ? "active" : ""}`}
+        >
+          <span className="sidebar-link-icon">
+            <IconSettings />
+          </span>
+          <span className="sidebar-link-label">Settings</span>
+        </NavLink>
       </div>
     </aside>
   );

@@ -45,17 +45,25 @@ export function IconReview() {
   );
 }
 
+export function IconSettings() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="2.25" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.6 4.6l1.4 1.4M14 14l1.4 1.4M4.6 15.4l1.4-1.4M14 6l1.4-1.4"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function IconLogo() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="3" y="3" width="18" height="18" rx="5" fill="url(#logo-grad)" />
+      <rect x="3" y="3" width="18" height="18" fill="#171717" />
       <path d="M8 15V9l4 3 4-3v6" stroke="#fff" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
-      <defs>
-        <linearGradient id="logo-grad" x1="3" y1="3" x2="21" y2="21">
-          <stop stopColor="#818cf8" />
-          <stop offset="1" stopColor="#6366f1" />
-        </linearGradient>
-      </defs>
     </svg>
   );
 }

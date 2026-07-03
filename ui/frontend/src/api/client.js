@@ -13,6 +13,14 @@ export const api = {
   health: () => request("/api/health"),
   config: () => request("/api/config"),
 
+  getEngineConfig: () => request("/api/engine-config"),
+  saveEngineConfig: (config) =>
+    request("/api/engine-config", {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ config }),
+    }),
+
   getProfile: () => request("/api/profile"),
   saveProfile: (profile) =>
     request("/api/profile", {
@@ -56,8 +64,12 @@ export const api = {
       headers: JSON_HEADERS,
       body: JSON.stringify(payload),
     }),
-  rebuild: (slug) =>
-    request(`/api/build/${encodeURIComponent(slug)}`, { method: "POST" }),
+  rebuild: (slug, payload = {}) =>
+    request(`/api/build/${encodeURIComponent(slug)}`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
+    }),
 
   listTemplates: () => request("/api/templates"),
   getTemplate: (id) => request(`/api/templates/${encodeURIComponent(id)}`),
@@ -77,8 +89,17 @@ export const api = {
   generateStatus: () => request("/api/generate/status"),
   generateLog: (offset = 0) =>
     request(`/api/generate/log?offset=${encodeURIComponent(String(offset))}`),
-  startGenerate: async () => {
-    const response = await fetch("/api/generate", { method: "POST" });
+  startGenerate: async ({ fromStage = "stage_1", onlyStage = null, slugs = null, buildTargets = "both" } = {}) => {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        from_stage: fromStage,
+        only_stage: onlyStage || undefined,
+        slugs: slugs && slugs.length ? slugs : undefined,
+        build_targets: buildTargets,
+      }),
+    });
     const data = await response.json().catch(() => ({}));
     if (response.status === 409) {
       return { ok: true, alreadyRunning: true, ...data };
@@ -88,4 +109,13 @@ export const api = {
     }
     return { ok: true, alreadyRunning: false, ...data };
   },
+
+  getReviewHtml: (slug, doc) =>
+    request(`/api/review/${encodeURIComponent(slug)}/html?doc=${encodeURIComponent(doc)}`),
+  saveReviewHtml: (slug, payload) =>
+    request(`/api/review/${encodeURIComponent(slug)}/html`, {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
+    }),
 };

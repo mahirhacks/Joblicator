@@ -84,6 +84,7 @@ from utils import (
     enforce_max_words,
     count_words,
     generation_options,
+    iter_applications,
     load_config,
     load_json,
     profile_for_prompt,
@@ -1646,8 +1647,7 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         slug_to_application = dict(applications.items())
         updates: dict[str, Any] = {}
 
-        for index, (slug, application) in enumerate(applications.items(), start=1):
-            app_key = _application_key(index)
+        for index, app_key, slug, application in iter_applications(applications):
             try:
                 stage1_entry = _stage1_block(stage1, app_key)
                 stage2_entry = _stage2_block(stage2, app_key)

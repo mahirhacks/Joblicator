@@ -30,7 +30,7 @@ stage_2:
     enforce_claims_manifest: true
   skills:
     domain_count: 5
-    subskill_min: 3
+    subskill_min: 1
     subskill_max: 6
   certifications:
     description_min_chars: 24
@@ -43,6 +43,8 @@ stage_2:
   parser_verification:
     enabled: true
     max_passes: 2
+  parser_autofix:
+    enabled: true
 stage_3:
   body_paragraphs: 3
   body_paragraph:

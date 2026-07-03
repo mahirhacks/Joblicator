@@ -87,6 +87,7 @@ from utils import (
     ensure_project_path,
     export_json,
     generation_options,
+    iter_applications,
     load_config,
     load_json,
     profile_for_prompt,
@@ -103,6 +104,7 @@ from verification import (
 )
 from skills_validator import enforce_skill_keys_only, validate_skills_output
 from style_validator import scan_cv_style
+from cv_autofix import autofix_cv_until_clean
 
 STAGE_1_DEFAULT = "engine/dynamic_engine/data/stage_1.json"
 STAGE_2_DEFAULT = "engine/dynamic_engine/data/stage_2.json"
@@ -460,6 +462,15 @@ def _certifications_settings(config: dict) -> dict[str, int]:
 def _style_verification_enabled(config: dict) -> bool:
     raw = config.get("stage_2", {}).get("style_verification", {})
     return bool(raw.get("enabled", True))
+
+
+def _parser_autofix_enabled(config: dict) -> bool:
+    return bool(config.get("stage_2", {}).get("parser_autofix", {}).get("enabled", True))
+
+
+def _apply_deterministic_cv_autofix(content: dict[str, Any]) -> bool:
+    """Fix opener collisions and similar style issues without another LLM call."""
+    return autofix_cv_until_clean(content)
 
 
 def _skills_settings(config: dict) -> dict[str, int]:
@@ -2152,6 +2163,25 @@ def parser_verify_and_regenerate(
             file=sys.stderr,
         )
 
+        if "_document_style" in issues_by_section and _parser_autofix_enabled(config):
+            if _apply_deterministic_cv_autofix(content):
+                polished = polish_application_output(_content_without_meta(content))
+                polished = finalize_application_content(polished, profile, skills_settings, cert_settings)
+                for key, value in polished.items():
+                    content[key] = value
+                scan_content = _content_without_meta(content)
+                issues_by_section = parse_content_issues(
+                    scan_content,
+                    profile,
+                    skills_settings,
+                    cert_settings,
+                    style_check=style_check,
+                )
+                if not issues_by_section:
+                    print(f"Stage 2 — {app_key}: parser issues cleared by auto-fix", file=sys.stderr)
+                    content["parser_review"] = _build_parser_review({}, profile)
+                    return content
+
         regen_plan: dict[str, list[str]] = {}
         for section, issues in issues_by_section.items():
             if section == "_document_style":
@@ -2199,6 +2229,23 @@ def parser_verify_and_regenerate(
         cert_settings,
         style_check=style_check,
     )
+    if issues_by_section and "_document_style" in issues_by_section and _parser_autofix_enabled(config):
+        if _apply_deterministic_cv_autofix(content):
+            polished = polish_application_output(_content_without_meta(content))
+            polished = finalize_application_content(polished, profile, skills_settings, cert_settings)
+            for key, value in polished.items():
+                content[key] = value
+            scan_content = _content_without_meta(content)
+            issues_by_section = parse_content_issues(
+                scan_content,
+                profile,
+                skills_settings,
+                cert_settings,
+                style_check=style_check,
+            )
+            if not issues_by_section:
+                print(f"Stage 2 — {app_key}: parser issues cleared by auto-fix", file=sys.stderr)
+
     content["parser_review"] = _build_parser_review(issues_by_section, profile)
     if issues_by_section:
         print(
@@ -2386,8 +2433,7 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
     slug_to_application = dict(applications.items())
     updates: dict[str, Any] = {}
 
-    for index, (slug, application) in enumerate(applications.items(), start=1):
-        app_key = _application_key(index)
+    for index, app_key, slug, application in iter_applications(applications):
         try:
             stage1_entry = _stage1_block(stage1, app_key)
         except ValueError as exc:

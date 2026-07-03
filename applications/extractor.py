@@ -22,6 +22,7 @@ import sys
 if str(DIR.parent) not in sys.path:
     sys.path.insert(0, str(DIR.parent))
 
+from applications.slug_utils import unique_slug
 from applications.storage import load_json_path
 
 JSON_PATH = load_json_path()
@@ -131,15 +132,6 @@ def slugify(company: str, title: str = "") -> str:
     if not slug and title:
         slug = re.sub(r"[^a-z0-9]+", "_", title.strip().lower()).strip("_")
     return slug or "unknown_company"
-
-
-def unique_key(key: str, existing: dict) -> str:
-    if key not in existing:
-        return key
-    suffix = 2
-    while f"{key}_{suffix}" in existing:
-        suffix += 1
-    return f"{key}_{suffix}"
 
 
 def load_json(json_path: Path = JSON_PATH) -> dict[str, dict[str, str]]:
@@ -311,7 +303,9 @@ def to_record(app: RawApplication) -> dict[str, str] | None:
     if not cleaned_about and not cleaned_description and _is_placeholder(app.company):
         return None
 
+    company = "" if _is_placeholder(app.company) else app.company.strip()
     return {
+        "company": company,
         "url": "" if _is_placeholder(app.url) else app.url.strip(),
         "location": "" if _is_placeholder(app.location) else app.location.strip(),
         "title": "" if _is_placeholder(app.title) else app.title.strip(),
@@ -347,7 +341,7 @@ def extract(text: str) -> dict[str, dict[str, str]]:
         record = to_record(app)
         if record is None:
             continue
-        key = unique_key(slugify(app.company, app.title), records)
+        key = unique_slug(slugify(app.company, app.title), records)
         records[key] = record
 
     return records
@@ -368,7 +362,7 @@ def append_application(
         raise ValueError("Invalid application data.")
 
     records = load_json(json_path)
-    key = unique_key(slugify(company, title), records)
+    key = unique_slug(slugify(company, title), records)
     records[key] = record
     write_json(records, json_path)
     return key, len(records)

@@ -42,6 +42,7 @@ from loader import (  # noqa: E402
 )
 from normalizer import build_cover_letter_context, build_cv_context  # noqa: E402
 from renderer import render_html, safe_filename_part, write_html, write_pdf  # noqa: E402
+from utils import build_targets, selected_slugs  # noqa: E402
 from verification import (  # noqa: E402
     assert_application_parser_passed,
     assert_pipeline_not_failed,
@@ -95,7 +96,12 @@ def build_application_documents(
     template_settings: dict[str, Any],
     cv_template_id: str | None = None,
     cover_template_id: str | None = None,
+    targets: frozenset[str] | None = None,
 ) -> dict[str, Path]:
+    targets = targets or build_targets()
+    if not targets:
+        raise ValueError("No build targets specified (use cv, letter, or both)")
+
     defaults = template_settings.get("defaults", {})
     cv_template_id = cv_template_id or str(defaults.get("cv", "cv_professional"))
     cover_template_id = cover_template_id or str(defaults.get("cover_letter", "cover_letter_formal"))
@@ -106,26 +112,27 @@ def build_application_documents(
     out_dir = _output_dir(template_settings) / stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    cv_context = build_cv_context(header, resume)
-    letter_context = build_cover_letter_context(header, letter)
-
     cv_template = resolve_template_path(template_settings, cv_template_id)
     cover_template = resolve_template_path(template_settings, cover_template_id)
 
     outputs: dict[str, Path] = {}
     formats = _formats(template_settings)
 
-    cv_html = render_html(cv_template, cv_context)
-    cover_html = render_html(cover_template, letter_context)
+    if "cv" in targets:
+        cv_context = build_cv_context(header, resume)
+        cv_html = render_html(cv_template, cv_context)
+        write_html(cv_html, out_dir / f"{stem}_cv.html")
+        outputs["cv_html"] = out_dir / f"{stem}_cv.html"
+        if "pdf" in formats:
+            outputs["cv_pdf"] = write_pdf(cv_html, out_dir / f"{stem}_cv.pdf")
 
-    write_html(cv_html, out_dir / f"{stem}_cv.html")
-    write_html(cover_html, out_dir / f"{stem}_cover_letter.html")
-    outputs["cv_html"] = out_dir / f"{stem}_cv.html"
-    outputs["cover_html"] = out_dir / f"{stem}_cover_letter.html"
-
-    if "pdf" in formats:
-        outputs["cv_pdf"] = write_pdf(cv_html, out_dir / f"{stem}_cv.pdf")
-        outputs["cover_pdf"] = write_pdf(cover_html, out_dir / f"{stem}_cover_letter.pdf")
+    if "letter" in targets:
+        letter_context = build_cover_letter_context(header, letter)
+        cover_html = render_html(cover_template, letter_context)
+        write_html(cover_html, out_dir / f"{stem}_cover_letter.html")
+        outputs["cover_html"] = out_dir / f"{stem}_cover_letter.html"
+        if "pdf" in formats:
+            outputs["cover_pdf"] = write_pdf(cover_html, out_dir / f"{stem}_cover_letter.pdf")
 
     return outputs
 
@@ -135,6 +142,7 @@ def run() -> list[dict[str, Any]]:
     template_settings = load_template_settings()
     stage2 = load_stage_2(config)
     stage3 = load_stage_3(config)
+    targets = build_targets()
     try:
         stage1 = load_stage_1(config)
     except (FileNotFoundError, ValueError):
@@ -153,30 +161,48 @@ def run() -> list[dict[str, Any]]:
                 f"See {failure_report} for details."
             )
 
-    if not stage2:
+    if "cv" in targets and not stage2:
         raise ValueError("stage_2.json is empty — run stage_2.py first")
-    if not stage3:
+    if "letter" in targets and not stage3:
         raise ValueError("stage_3.json is empty — run stage_3.py first")
 
     assert_pipeline_not_failed(stage2, label="stage_2.json")
-    assert_pipeline_not_failed(stage3, label="stage_3.json")
+    if "letter" in targets:
+        assert_pipeline_not_failed(stage3, label="stage_3.json")
 
     results: list[dict[str, Any]] = []
+    slug_filter = selected_slugs()
     for app_key in list_application_keys(stage2):
-        if app_key not in stage3:
-            print(f"Warning: skipping {app_key} — missing in stage_3.json", file=sys.stderr)
+        stage1_entry = stage1.get(app_key)
+        if slug_filter is not None and isinstance(stage1_entry, dict):
+            source_slug = str(stage1_entry.get("source_slug", "")).strip()
+            if source_slug not in slug_filter:
+                continue
+        elif slug_filter is not None:
             continue
 
         header, resume = split_header_and_application(stage2, app_key)
-        _, letter = split_header_and_application(stage3, app_key)
-        assert_application_parser_passed(app_key, resume, stage_label="Stage 2")
-        assert_application_parser_passed(app_key, letter, stage_label="Stage 3")
-        outputs = build_application_documents(app_key, header, resume, letter, template_settings)
+        letter: dict[str, Any] = {}
 
-        stage1_entry = stage1.get(app_key)
-        if isinstance(stage1_entry, dict):
+        if "letter" in targets:
+            if app_key not in stage3:
+                print(f"Warning: skipping {app_key} — missing in stage_3.json", file=sys.stderr)
+                continue
+            _, letter = split_header_and_application(stage3, app_key)
+            assert_application_parser_passed(app_key, letter, stage_label="Stage 3")
+
+        if "cv" in targets:
+            assert_application_parser_passed(app_key, resume, stage_label="Stage 2")
+
+        outputs = build_application_documents(
+            app_key, header, resume, letter, template_settings, targets=targets
+        )
+
+        if isinstance(stage1_entry, dict) and "cv" in targets:
             cv_text = flatten_context_text(build_cv_context(header, resume))
-            letter_text = flatten_context_text(build_cover_letter_context(header, letter))
+            letter_text = ""
+            if "letter" in targets and letter:
+                letter_text = flatten_context_text(build_cover_letter_context(header, letter))
             report = build_ats_report(stage1_entry, config, cv_text, letter_text)
             cv_html_path = outputs.get("cv_html")
             if cv_html_path is not None:
@@ -187,7 +213,8 @@ def run() -> list[dict[str, Any]]:
             print(format_ats_summary(app_key, report), file=sys.stderr)
 
         results.append({"application": app_key, "outputs": outputs})
-        print(f"Built {app_key} -> {outputs.get('cv_pdf', outputs.get('cv_html'))}", file=sys.stderr)
+        built = outputs.get("cv_pdf") or outputs.get("cv_html") or outputs.get("cover_pdf") or outputs.get("cover_html")
+        print(f"Built {app_key} -> {built}", file=sys.stderr)
 
     if not results:
         raise ValueError("No application documents were built")

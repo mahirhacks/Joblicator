@@ -4,14 +4,17 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App.jsx";
 import GlobalStyles from "./GlobalStyles.jsx";
 import { ToastProvider } from "./components/Toast.jsx";
+import { ThemeProvider } from "./theme/ThemeContext.jsx";
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <BrowserRouter>
-      <GlobalStyles />
-      <ToastProvider>
-        <App />
-      </ToastProvider>
+      <ThemeProvider>
+        <GlobalStyles />
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </ThemeProvider>
     </BrowserRouter>
   </StrictMode>
 );

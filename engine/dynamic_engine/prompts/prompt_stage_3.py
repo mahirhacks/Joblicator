@@ -12,7 +12,12 @@ _GROUNDING_RULES = """
 - resume_draft is the tailored CV from stage 2 — the letter must not contradict it.
 - Never invent employers, degrees, certifications, tools, metrics, or project outcomes.
 - If claims_to_avoid or claims_ledger appears in the user message: never state or imply those phrases.
-- gaps_addressed (if provided) are the ONLY honest way to acknowledge weaknesses — do not overstate fit."""
+- Never name a certification, tool, methodology, or years-of-experience figure the candidate does NOT
+  have — not even to admit the candidate lacks it. A cover letter argues the case for the candidate;
+  it does not audit them against the job posting. If the candidate is missing something the posting
+  asks for, the correct move is silence on that point, not disclosure.
+- Any gaps_addressed or similar weakness data appearing in the user message must be ignored for
+  letter content — it is not a valid input to this prompt."""
 
 _LETTER_BANNED = """
 ## Banned phrases and patterns (automatic failures if used)
@@ -25,7 +30,11 @@ _LETTER_BANNED = """
 - Copy-pasting raw job-description fragments (e.g. "value of secure SDLC", broken keyword inserts)
 - Generic filler: "perfect fit", "ideal candidate", "unique opportunity", "hit the ground running"
 - Exaggeration: "expert", "world-class", "extensive experience in [thing not in CV]"
-- Do not mention the fit score number."""
+- Do not mention the fit score number.
+- Any variation of naming what the candidate lacks: "I recognize that I do not yet", "I acknowledge
+  that I lack", "I have not yet been responsible for", "nor do I possess", "I intend to bridge these
+  gaps", "I am still developing" — naming a missing qualification is banned regardless of phrasing or
+  how confident it sounds."""
 
 _VOICE_RULE = """
 ## Voice
@@ -60,7 +69,9 @@ You must output exactly total_paragraphs body sections (BODY_1, BODY_2, ...) fro
 - BODY_1: Your top job-relevant story as claim -> evidence -> tie-back:
   (a) the capability the job needs, (b) the specific project/experience from resume_draft proving it — with named tools and what YOU did, (c) one clause connecting it to the employer's actual product or requirement from tailoring.
 - BODY_2: Second evidence strand — a DIFFERENT project or skill area with the same claim -> evidence -> tie-back shape. Do not repeat BODY_1's opening words or reuse its proof point.
-- BODY_3+ (if required): Additional evidence OR honest gap acknowledgment (see gaps_addressed). Never repeat earlier paragraphs.
+- BODY_3+ (if required): Additional evidence only — a third project, an ownership/leadership angle, or a
+  deeper domain tie-in. Never repeat earlier paragraphs. Never use an extra body slot to explain what
+  the candidate lacks — every body paragraph exists to add evidence, not to subtract it.
 
 ### Body writing rules
 - Every sentence starts with "I" + verb.
@@ -70,7 +81,6 @@ You must output exactly total_paragraphs body sections (BODY_1, BODY_2, ...) fro
   technology from one project into another project's story (that is invention).
 - At least one sentence per body paragraph must reference the employer's domain, product, or a requirement from the posting (from tailoring) — show you read the job ad.
 - Respect word_limit.max_words per body paragraph if provided in user message — stay under the cap.
-- If gaps_addressed is provided and deterministic_gap_paragraph applies, one body slot may be reserved for gap honesty — do not contradict gaps_addressed elsewhere.
 - Weave available_keywords naturally inside grammatical sentences — never dump comma-separated keywords."""
 
 _CLOSING_GUIDE = """
@@ -89,12 +99,16 @@ _LOOP_LETTER_CORE = _BASE + _VOICE_RULE + _OPENING_GUIDE + _BODY_GUIDE + _CLOSIN
 - claims_ledger: canonical_framing defines the factual BOUNDARY of a claim — rephrase it into natural
   letter prose in your own words; never paste the canonical text verbatim (it is resume-speak) and
   never exceed its scope or use forbidden_phrases.
-- gaps_addressed: if a gap sentence is provided, you may weave it into a body paragraph — do not claim you have skills the gap denies.
+- Do not acknowledge, apologize for, or reference anything the candidate lacks, even briefly, even as
+  a single clause. Silence on a missing qualification is always correct; disclosure is always wrong.
+  If the posting wants something resume_draft doesn't support, simply don't write about it — build the
+  letter entirely from what the candidate does have.
 
 ## Cohesion rules
 - The letter must read as one continuous document — opening, bodies, and closing should not contradict each other.
 - Do not introduce a skill in the closing that you never supported in the body.
 - Do not repeat the same accomplishment in multiple paragraphs.
+- No paragraph may exist solely to explain what the candidate is missing.
 
 ## Output format
 OPENING:
@@ -127,24 +141,27 @@ From fit_review gaps (user message), list short phrases the cover letter must NO
 ## Output format
 One phrase per line, same order as gaps. Empty line = no claim to avoid for that gap."""
 
-LOOP_GAPS_SYSTEM = _BASE + _VOICE_RULE + """
+# --- DEPRECATED ---
+# The two prompts below used to generate gap-confession content for the letter
+# (e.g. "I recognize that I do not yet hold OSCP..."). That pathway is removed:
+# a cover letter should never volunteer certifications, experience, or
+# responsibilities the candidate lacks — the letter's job is to advocate, not
+# to audit against the posting. LOOP_LETTER_PROSE_SYSTEM now hard-ignores
+# gaps_addressed even if it's still passed in, so leaving these defined (as
+# no-ops) won't reintroduce the bug. They're kept only so any existing import
+# in stage_3.py doesn't crash. You should actually remove the calls to these
+# two in stage_3.py's control flow — leaving them wired up just burns API
+# calls for output that gets discarded. Paste stage_3.py and I'll patch it.
+
+LOOP_GAPS_SYSTEM = _BASE + """
+
+## DEPRECATED — do not use this output as letter content
+Gap acknowledgment has been removed from the cover letter pipeline. This prompt is retained only for
+import compatibility.
 
 ## Task
-For each gap in fit_review, write one honest first-person sentence the letter MAY use to acknowledge the limitation without torpedoing the application.
-
-## Sentence recipe
-- Start with "I".
-- Acknowledge the gap honestly (what you have not done or are still building).
-- Optionally add how you are addressing it (learning, adjacent experience) — only if true in candidate_cv.
-- Tone: confident humility, not apology tour.
-
-## Rules
-- One sentence per line, same order as input gaps.
-- Empty line = no acknowledgment needed for that gap.
-- Do not claim mastery of the missing skill.
-
-## Output format
-One sentence per line, same order as gaps."""
+Output exactly one empty line per gap in fit_review, matching the input count. No text, no
+punctuation, nothing else — not even a partial sentence."""
 
 LOOP_LETTER_PROSE_SYSTEM = _LOOP_LETTER_CORE
 
@@ -163,13 +180,17 @@ Rate letter_prose as one unified document (opening + all body paragraphs + closi
 - Body paragraphs shorter than 3 sentences (thin filler).
 - Openings with zero concrete proof (no named project/employer/cert).
 - Any paragraph that never references the employer's product, domain, or requirements.
-- Gap paragraphs that read as a list of confessions instead of one confident acknowledgment with a forward pivot.
 - Salutations inside opening_paragraph ("Dear ...") — the template renders the salutation.
+
+## Automatic score cap at 4, regardless of other quality
+- Any sentence naming a certification, credential, tool, methodology, or years-of-experience figure
+  the candidate does NOT hold — even framed as confident self-awareness or "a gap I'm closing."
+- Any sentence containing "I recognize that I do not", "I acknowledge that I lack", "I have not yet
+  been responsible for", "nor do I possess", or equivalent phrasing naming a missing qualification.
 
 ## NOT violations (do not deduct for these)
 - "I am applying for the <role> role at <company>" is the APPROVED opener shape — only
   "I am writing to ..." variants are banned.
-- Honest gap acknowledgments per gaps_addressed: disclosed gaps are policy, not weakness.
 
 ## Feedback rules
 - FEEDBACK must cite concrete fixes (which paragraph, what to change).
@@ -188,25 +209,13 @@ LOOP_CLOSING_SYSTEM = LOOP_LETTER_PROSE_SYSTEM
 
 LOOP_SMOOTH_GAP_SYSTEM = _BASE + _VOICE_RULE + """
 
+## DEPRECATED — do not use this output as letter content
+This prompt used to compress gap-confession sentences into one paragraph. The letter pipeline no
+longer includes gap content at all, so there is nothing to smooth. Retained only for import
+compatibility.
+
 ## Task
-Rewrite a draft gap-disclosure paragraph into ONE smooth, confident body paragraph for a cover letter.
-
-The draft was built by concatenating honest gap sentences. It often repeats "I want to be upfront" and reads like a list of disclaimers. Your job is to compress the same honest limitations into natural prose that a hiring manager reads as self-awareness, not weakness.
-
-## Recipe
-1. Read draft_gap_paragraph and gaps_to_preserve — every listed gap must still be acknowledged, but GROUP related technologies into one clause (e.g. "orchestration frameworks such as LangGraph and workflow engines like Temporal.io").
-2. Write ONE paragraph of at most 3-4 sentences (no bullets, no numbered list).
-3. Vary sentence openings — never repeat the same three-word opener twice.
-4. Final sentence must pivot forward: connect an adjacent strength from strengths_context (if provided) or the draft itself to how quickly you can close these gaps. End on capability, not on the deficit.
-5. Tone: confident humility. One acknowledgment is honest; five separate confessions are self-sabotage.
-6. Stay under word_limit.max_words from the user message.
-
-## Hard rules
-- Do not drop any gap from gaps_to_preserve (grouping several into one clause is fine).
-- Do not invent skills, experience, or training not implied by the draft or strengths_context.
-- Do not use banned phrases from the system prompt.
-- Every sentence starts with "I".
-- Output the paragraph only — no PARAGRAPH: label, no commentary."""
+Output a single empty string. No text, no punctuation, nothing else."""
 
 KEYWORD_PICK_MIN = 0
 KEYWORD_PICK_MAX = 4
@@ -218,7 +227,7 @@ PARSER_SECTIONS = (
     "opening_paragraph",
     "body_paragraphs",
     "closing_paragraph",
-    "gaps_addressed",
 )
 
+# No longer includes a reserved gap-paragraph slot — all body paragraphs are evidence.
 DEFAULT_BODY_PARAGRAPHS = 3

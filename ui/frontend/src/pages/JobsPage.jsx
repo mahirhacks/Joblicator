@@ -13,6 +13,18 @@ const EMPTY_JOB = {
   description: "",
 };
 
+function draftFromJob(data) {
+  if (!data) return { ...EMPTY_JOB };
+  return {
+    company: data.company || "",
+    title: data.title || "",
+    location: data.location || "",
+    url: data.url || "",
+    about: data.about || "",
+    description: data.description || "",
+  };
+}
+
 function parseJobFromText(text) {
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   const urlMatch = text.match(/https?:\/\/[^\s]+/i);
@@ -22,15 +34,6 @@ function parseJobFromText(text) {
     description: text,
     about: lines.slice(0, 3).join(" "),
   };
-}
-
-function companyFromSlug(slug) {
-  if (!slug) return "";
-  const parts = slug.split("_");
-  return parts
-    .slice(0, -2)
-    .join(" ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function JobForm({ draft, onChange }) {
@@ -122,19 +125,21 @@ export default function JobsPage() {
     chatEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  async function loadJobDraft(slug, listedJob) {
+    if (listedJob) {
+      setDraft(draftFromJob(listedJob));
+    }
+    const data = await api.getJob(slug);
+    setDraft(draftFromJob(data));
+    return data;
+  }
+
   async function selectJob(slug) {
     setSelectedSlug(slug);
     setEditing(true);
     try {
-      const data = await api.getJob(slug);
-      setDraft({
-        company: companyFromSlug(slug),
-        title: data.title || "",
-        location: data.location || "",
-        url: data.url || "",
-        about: data.about || "",
-        description: data.description || "",
-      });
+      const listed = jobs.find((job) => job.slug === slug);
+      await loadJobDraft(slug, listed);
     } catch (e) {
       showToast(e.message, "error");
     }
@@ -194,15 +199,21 @@ export default function JobsPage() {
     }
     setBusy(true);
     try {
+      let savedSlug = selectedSlug;
       if (selectedSlug) {
-        await api.updateJob(selectedSlug, draft);
+        const updated = await api.updateJob(selectedSlug, draft);
+        savedSlug = updated.slug || selectedSlug;
         showToast("Job updated");
       } else {
         const res = await api.createJob(draft);
+        savedSlug = res.slug;
         setSelectedSlug(res.slug);
         showToast("Job saved");
       }
       await loadJobs();
+      if (savedSlug) {
+        await loadJobDraft(savedSlug);
+      }
       setEditing(true);
     } catch (e) {
       showToast(e.message, "error");
@@ -310,8 +321,10 @@ export default function JobsPage() {
                     className={`profile-nav-item ${selectedSlug === job.slug ? "active" : ""}`}
                     onClick={() => selectJob(job.slug)}
                   >
-                    <span className="jobs-nav-title">{job.title || job.slug}</span>
-                    {job.location && <span className="jobs-nav-meta">{job.location}</span>}
+                    <span className="jobs-nav-title">{job.company || job.title || job.slug}</span>
+                    <span className="jobs-nav-meta">
+                      {[job.company ? job.title || job.slug : null, job.location].filter(Boolean).join(" · ")}
+                    </span>
                   </button>
                 </li>
               ))}

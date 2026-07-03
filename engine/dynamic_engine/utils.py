@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -443,3 +445,51 @@ def build_parser_improvement_block(
     if prior:
         block["previous_parser_issues"] = prior
     return block
+
+
+def selected_slugs() -> list[str] | None:
+    """Read JOBLICATION_SLUGS env var (comma-separated). None means all applications."""
+    raw = os.environ.get("JOBLICATION_SLUGS", "").strip()
+    if not raw:
+        return None
+    slugs = [part.strip() for part in raw.split(",") if part.strip()]
+    return slugs or None
+
+
+def iter_applications(
+    applications: dict[str, Any],
+) -> Iterator[tuple[int, str, str, dict[str, Any]]]:
+    """Yield (index, app_key, slug, record) preserving original index for app_key stability."""
+    slugs = selected_slugs()
+    for index, (slug, application) in enumerate(applications.items(), start=1):
+        if not isinstance(application, dict):
+            continue
+        if slugs is not None and slug not in slugs:
+            continue
+        yield index, f"application_{index}", slug, application
+
+
+def parse_build_targets(raw: str | None) -> frozenset[str]:
+    """Parse cv / letter / both into a set of build targets."""
+    if raw is None or not str(raw).strip():
+        return frozenset({"cv", "letter"})
+    text = str(raw).strip().lower()
+    if text in ("both", "all"):
+        return frozenset({"cv", "letter"})
+    tokens = {part.strip() for part in text.replace(" ", ",").split(",") if part.strip()}
+    if "both" in tokens or "all" in tokens:
+        return frozenset({"cv", "letter"})
+    out: set[str] = set()
+    for token in tokens:
+        if token in ("cv", "resume"):
+            out.add("cv")
+        elif token in ("letter", "cover", "cover_letter", "job"):
+            out.add("letter")
+    if not out:
+        return frozenset({"cv", "letter"})
+    return frozenset(out)
+
+
+def build_targets() -> frozenset[str]:
+    """Read JOBLICATION_BUILD_TARGETS env var (cv, letter, or both)."""
+    return parse_build_targets(os.environ.get("JOBLICATION_BUILD_TARGETS"))

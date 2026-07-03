@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useToast } from "../components/Toast.jsx";
@@ -20,6 +20,11 @@ export default function ReviewPage() {
   const [previewDoc, setPreviewDoc] = useState("cv");
   const [previewMode, setPreviewMode] = useState("html");
   const [saving, setSaving] = useState(false);
+  const [htmlContent, setHtmlContent] = useState("");
+  const [htmlDirty, setHtmlDirty] = useState(false);
+  const [htmlLoading, setHtmlLoading] = useState(false);
+  const [previewVersion, setPreviewVersion] = useState(0);
+  const editorRef = useRef(null);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -45,6 +50,27 @@ export default function ReviewPage() {
     }
   }, [slug, showToast]);
 
+  const outputFolder = review?.output_folder || jobs.find((j) => j.slug === slug)?.output_folder;
+  const files = review?.files?.length
+    ? review.files
+    : jobs.find((j) => j.slug === slug)?.files || [];
+
+  const loadHtmlPreview = useCallback(async () => {
+    if (!slug || previewMode !== "html") return;
+    const doc = previewDoc === "cv" ? "cv" : "letter";
+    setHtmlLoading(true);
+    try {
+      const data = await api.getReviewHtml(slug, doc);
+      setHtmlContent(data.html || "");
+      setHtmlDirty(false);
+    } catch (e) {
+      showToast(e.message, "error");
+      setHtmlContent("");
+    } finally {
+      setHtmlLoading(false);
+    }
+  }, [slug, previewMode, previewDoc, showToast]);
+
   useEffect(() => {
     loadJobs();
   }, [loadJobs]);
@@ -55,11 +81,6 @@ export default function ReviewPage() {
       loadReview();
     }
   }, [slug, loadReview, setSearchParams]);
-
-  const outputFolder = review?.output_folder || jobs.find((j) => j.slug === slug)?.output_folder;
-  const files = review?.files?.length
-    ? review.files
-    : jobs.find((j) => j.slug === slug)?.files || [];
 
   const cvHtml = findFile(files, "_cv.html");
   const cvPdf = findFile(files, "_cv.pdf");
@@ -73,11 +94,43 @@ export default function ReviewPage() {
     return previewMode === "pdf" ? letterPdf : letterHtml;
   }, [previewDoc, previewMode, cvHtml, cvPdf, letterHtml, letterPdf]);
 
-  const previewUrl = outputFolder && previewFile ? api.fileUrl(outputFolder, previewFile) : null;
+  const previewUrl =
+    outputFolder && previewFile
+      ? `${api.fileUrl(outputFolder, previewFile)}?v=${previewVersion}`
+      : null;
+
+  useEffect(() => {
+    if (tab === "preview" && previewMode === "html" && outputFolder && previewFile) {
+      loadHtmlPreview();
+    }
+  }, [tab, previewMode, previewDoc, slug, outputFolder, previewFile, loadHtmlPreview]);
+
+  useEffect(() => {
+    if (previewMode === "html" && editorRef.current && htmlContent && !htmlLoading) {
+      if (editorRef.current.innerHTML !== htmlContent) {
+        editorRef.current.innerHTML = htmlContent;
+      }
+    }
+  }, [htmlContent, htmlLoading, previewMode]);
 
   async function saveEdits() {
     setSaving(true);
     try {
+      if (tab === "preview" && previewMode === "html") {
+        const html = editorRef.current?.innerHTML ?? htmlContent;
+        await api.saveReviewHtml(slug, {
+          doc: previewDoc === "cv" ? "cv" : "letter",
+          html,
+        });
+        setHtmlContent(html);
+        setHtmlDirty(false);
+        setPreviewVersion((v) => v + 1);
+        showToast("HTML saved and PDF updated");
+        await loadJobs();
+        await loadReview();
+        return;
+      }
+
       let stage_2;
       let stage_3;
       try {
@@ -109,11 +162,12 @@ export default function ReviewPage() {
         stage_3: JSON.parse(stage3Text),
       });
       await api.rebuild(slug);
-      showToast("PDFs rebuilt");
+      showToast("PDFs rebuilt from JSON");
       await loadJobs();
       await loadReview();
       setTab("preview");
       setPreviewMode("pdf");
+      setPreviewVersion((v) => v + 1);
     } catch (e) {
       showToast(e.message, "error");
     } finally {
@@ -135,7 +189,7 @@ export default function ReviewPage() {
                 <select value={slug} onChange={(e) => setSlug(e.target.value)} className="ps-select">
                   {jobs.map((j) => (
                     <option key={j.slug} value={j.slug}>
-                      {j.title || j.slug}
+                      {j.company ? `${j.company} — ${j.title || j.slug}` : j.title || j.slug}
                     </option>
                   ))}
                 </select>
@@ -164,7 +218,7 @@ export default function ReviewPage() {
               <div className="review-preview-panel">
                 {!outputFolder && (
                   <p className="muted review-empty">
-                    No generated files yet. Run <strong>Generate all</strong> from Applications, then return here.
+                    No generated files yet. Run generation from Applications, then return here.
                   </p>
                 )}
 
@@ -205,25 +259,47 @@ export default function ReviewPage() {
                           PDF
                         </button>
                       </div>
-                      {previewUrl && (
+                      {previewMode === "html" && htmlDirty && (
+                        <span className="review-html-dirty muted">Unsaved HTML edits</span>
+                      )}
+                      {previewUrl && previewMode === "pdf" && (
                         <a href={previewUrl} target="_blank" rel="noreferrer" className="md-text-btn">
                           Open in new tab
                         </a>
                       )}
                     </div>
 
-                    {previewUrl ? (
+                    {previewMode === "html" ? (
+                      previewFile ? (
+                        <div className="review-preview-frame-wrap">
+                          {htmlLoading ? (
+                            <p className="muted review-empty">Loading HTML…</p>
+                          ) : (
+                            <div
+                              ref={editorRef}
+                              className="review-preview-editor"
+                              contentEditable
+                              suppressContentEditableWarning
+                              onInput={() => setHtmlDirty(true)}
+                              aria-label={`${previewDoc} HTML editor`}
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <p className="muted review-empty">HTML preview not available.</p>
+                      )
+                    ) : previewUrl ? (
                       <div className="review-preview-frame-wrap">
                         <iframe
                           key={previewUrl}
-                          title={`${previewDoc} ${previewMode} preview`}
+                          title={`${previewDoc} PDF preview`}
                           src={previewUrl}
                           className="review-preview-frame"
                         />
                       </div>
                     ) : (
                       <p className="muted review-empty">
-                        {previewMode === "pdf" ? "PDF not found — run Save & export PDF." : "HTML preview not available."}
+                        PDF not found — run Save &amp; export PDF.
                       </p>
                     )}
 
@@ -244,6 +320,11 @@ export default function ReviewPage() {
                         </a>
                       )}
                     </div>
+                    {tab === "preview" && previewMode === "html" && (
+                      <p className="review-html-note muted">
+                        Edit text directly in the HTML preview. Save &amp; export PDF rebuilds from JSON and may overwrite HTML edits.
+                      </p>
+                    )}
                   </>
                 )}
               </div>
@@ -269,9 +350,9 @@ export default function ReviewPage() {
                     className={`profile-nav-item ${slug === job.slug ? "active" : ""}`}
                     onClick={() => setSlug(job.slug)}
                   >
-                    <span className="jobs-nav-title">{job.title || job.slug}</span>
+                    <span className="jobs-nav-title">{job.company || job.title || job.slug}</span>
                     <span className="jobs-nav-meta">
-                      {job.has_output ? "Has output" : "No output yet"}
+                      {job.company ? job.title || job.slug : job.has_output ? "Has output" : "No output yet"}
                     </span>
                   </button>
                 </li>

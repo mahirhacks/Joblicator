@@ -47,8 +47,12 @@ htmlcov/
 # --- Node / frontend ---
 ui/frontend/node_modules/
 ui/frontend/dist/
+
+# Vite build output copied into ui/frontend/ for the Python server (npm run build)
+ui/frontend/assets/
+ui/frontend/index.html
+
 ui/frontend/.vite/
-ui/frontend/package-lock.json
 
 # --- OS / editor ---
 .DS_Store

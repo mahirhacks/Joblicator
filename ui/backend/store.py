@@ -83,6 +83,10 @@ def outputs_dir() -> Path:
     return (ROOT / rel).resolve()
 
 
+def engine_config_path() -> Path:
+    return DYNAMIC_ENGINE / "config.yaml"
+
+
 def load_template_settings() -> dict[str, Any]:
     return _read_json(template_settings_path(), {})
 
