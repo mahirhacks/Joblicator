@@ -20,10 +20,10 @@ The UI uses a minimal industrial design (square corners, hairline borders, upper
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  React UI (ui/frontend)          http://localhost:8080    │
+┌────────────────────────────────────────────────────────────────┐
+│  React UI (ui/frontend)          http://localhost:8080         │
 │  Profile · Jobs · Applications · Templates · Review · Settings │
-└──────────────────────────┬──────────────────────────────────┘
+└──────────────────────────┬─────────────────────────────────────┘
                            │ REST API
 ┌──────────────────────────▼──────────────────────────────────┐
 │  Python stdlib server (ui/backend/server.py)                │
@@ -100,7 +100,7 @@ These paths are gitignored—you need your own copies:
 Ensure Ollama is running and the model in `config.yaml` is pulled:
 
 ```bash
-ollama pull gemma4:26b
+ollama pull gemma4:26b (You can use any model that suits your machine best)
 ```
 
 Adjust the model in **Settings** or edit `engine/dynamic_engine/config.yaml` directly.
