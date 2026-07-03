@@ -6,12 +6,12 @@
   <style>
     @page {
       size: A4;
-      margin: 2.4cm;
+      margin: 1.6cm 2.0cm;
     }
     body {
       font-family: Arial, Helvetica, sans-serif;
-      font-size: 10.5pt;
-      line-height: 1.45;
+      font-size: 10.3pt;
+      line-height: 1.35;
       color: #1a1a1a;
       margin: 0;
       padding: 0;
@@ -29,7 +29,7 @@
       text-decoration: none;
     }
     .name {
-      font-size: 25pt;
+      font-size: 22pt;
       font-weight: bold;
       color: #17263b;
       margin: 0 0 3px 0;
@@ -44,9 +44,9 @@
     }
     .header-right {
       font-size: 9.5pt;
-      line-height: 1.6;
+      line-height: 1.45;
       text-align: right;
-      padding-top: 6px;
+      padding-top: 4px;
       color: #333333;
     }
     .header-right p {
@@ -60,7 +60,7 @@
       color: #333333;
     }
     .summary {
-      margin: 40px 0 0 0;
+      margin: 18px 0 0 0;
       text-align: justify;
       color: #262626;
     }
@@ -69,13 +69,16 @@
       font-weight: bold;
       color: #17263b;
       text-transform: uppercase;
-      margin: 38px 0 12px 0;
+      margin: 14px 0 6px 0;
+      border-bottom: 1px solid #d5dae2;
+      padding-bottom: 3px;
+      -pdf-keep-with-next: true;
     }
     .entry-row {
       margin-top: 0;
     }
     .entry-row--spaced {
-      margin-top: 14px;
+      margin-top: 9px;
     }
     .split-left {
       font-weight: bold;
@@ -96,19 +99,19 @@
     .subtitle {
       font-style: italic;
       color: #444b56;
-      margin: 3px 0 6px 0;
+      margin: 2px 0 5px 0;
     }
     .entry-body {
-      margin: 6px 0 0 0;
+      margin: 5px 0 0 0;
       text-align: justify;
     }
     ul.bullets {
-      margin: 8px 0 0 0;
+      margin: 6px 0 0 0;
       padding: 0 0 0 18px;
       list-style-type: circle;
     }
     ul.bullets li {
-      margin: 0 0 7px 0;
+      margin: 0 0 4px 0;
       padding-left: 2px;
       text-align: justify;
     }
@@ -116,7 +119,7 @@
       margin-bottom: 0;
     }
     .skills-line {
-      margin: 0 0 9px 0;
+      margin: 0 0 5px 0;
       text-align: justify;
     }
     .skills-line:last-child {
@@ -145,15 +148,15 @@
       font-size: 10.6pt;
       color: #1a1a1a;
     }
-    .cert-issuer {
-      margin: 3px 0 0 0;
+    .cert-issuer-inline {
       color: #444b56;
+      font-style: italic;
     }
     .cert-description {
       margin: 2px 0 0 0;
       color: #333;
       font-size: 9.5pt;
-      line-height: 1.35;
+      line-height: 1.3;
     }
     .block-text {
       margin: 0;
@@ -172,20 +175,44 @@
         {% if contact.email %}
         <p><span class="contact-label">Email:</span> <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>
         {% endif %}
-        {% if contact.linkedin %}
-        <p><span class="contact-label">LinkedIn:</span> <a href="{{ contact.linkedin }}">{{ contact.linkedin }}</a></p>
-        {% endif %}
         {% if contact.phone %}
         <p><span class="contact-label">Phone:</span> {{ contact.phone }}</p>
         {% endif %}
+        {% if contact.linkedin %}
+        <p><span class="contact-label">LinkedIn:</span> <a href="{{ contact.linkedin }}">{{ contact.linkedin_display or contact.linkedin }}</a></p>
+        {% endif %}
+        {% if contact.github %}
+        <p><span class="contact-label">GitHub:</span> <a href="{{ contact.github }}">{{ contact.github_display or contact.github }}</a></p>
+        {% endif %}
+        {% if contact.portfolio %}
+        <p><span class="contact-label">Portfolio:</span> <a href="{{ contact.portfolio }}">{{ contact.portfolio_display or contact.portfolio }}</a></p>
+        {% endif %}
         {% if contact.address %}
-        <p class="address-line"><span class="contact-label">Address:</span> {{ contact.address }}</p>
+        <p class="address-line"><span class="contact-label">Location:</span> {{ contact.address }}</p>
         {% endif %}
       </td>
     </tr>
   </table>
 
   {% if summary %}<p class="summary">{{ summary }}</p>{% endif %}
+
+  {% if skills or technical_skills or soft_skills %}
+  <div class="section">
+    <p class="section-title">Skills</p>
+    {% if skills %}
+    {% for group in skills %}
+    <p class="skills-line"><span class="skills-label">{{ group.label }}:</span> {{ group.entries | join(', ') }}</p>
+    {% endfor %}
+    {% else %}
+    {% if technical_skills %}
+    <p class="skills-line"><span class="skills-label">Technical Skills:</span> {{ technical_skills }}</p>
+    {% endif %}
+    {% if soft_skills %}
+    <p class="skills-line"><span class="skills-label">Soft Skills:</span> {{ soft_skills }}</p>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
 
   {% if work_experience %}
   <div class="section">
@@ -228,7 +255,7 @@
 
   {% if volunteer %}
   <div class="section">
-    <p class="section-title">Volunteer</p>
+    <p class="section-title">Volunteer Experience</p>
     {% for item in volunteer %}
     <div class="entry">
       <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
@@ -241,18 +268,6 @@
       {% if item.description %}<p class="entry-body">{{ item.description }}</p>{% endif %}
     </div>
     {% endfor %}
-  </div>
-  {% endif %}
-
-  {% if technical_skills or soft_skills %}
-  <div class="section">
-    <p class="section-title">Core Skills</p>
-    {% if technical_skills %}
-    <p class="skills-line"><span class="skills-label">Technical Skills:</span> {{ technical_skills }}</p>
-    {% endif %}
-    {% if soft_skills %}
-    <p class="skills-line"><span class="skills-label">Soft Skills:</span> {{ soft_skills }}</p>
-    {% endif %}
   </div>
   {% endif %}
 
@@ -273,23 +288,16 @@
         {% if edu.degree_rest %} {{ edu.degree_rest }}{% endif %}
       </p>
       {% endif %}
-      {% if edu.courses %}<p class="education-detail"><strong>Courses:</strong> {{ edu.courses }}</p>{% endif %}
       {% if edu.gpa %}<p class="education-detail"><strong>CGPA:</strong> {{ edu.gpa }}</p>{% endif %}
+      {% if edu.courses %}<p class="education-detail"><strong>Relevant Coursework:</strong> {{ edu.courses }}</p>{% endif %}
     </div>
     {% endfor %}
   </div>
   {% endif %}
 
-  {% if languages %}
-  <div class="section">
-    <p class="section-title">Languages</p>
-    <p class="block-text">{{ languages }}</p>
-  </div>
-  {% endif %}
-
   {% if certifications %}
   <div class="section">
-    <p class="section-title">Certificates</p>
+    <p class="section-title">Certifications</p>
     {% for cert in certifications %}
     <div class="entry">
       <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
@@ -298,17 +306,36 @@
           <td class="split-right">{{ cert.date }}</td>
         </tr>
       </table>
-      {% if cert.issuer %}<p class="cert-issuer">{{ cert.issuer }}</p>{% endif %}
-      {% if cert.description %}<p class="cert-description">{{ cert.description }}</p>{% endif %}
+      {% if cert.issuer or cert.description %}
+      <p class="cert-description">{% if cert.issuer %}<span class="cert-issuer-inline">{{ cert.issuer }}</span>{% if cert.description %} — {% endif %}{% endif %}{{ cert.description }}</p>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
   {% endif %}
 
-  {% if interests %}
+  {% if achievements %}
   <div class="section">
-    <p class="section-title">Interests</p>
-    <p class="block-text">{{ interests }}</p>
+    <p class="section-title">Achievements</p>
+    {% for item in achievements %}
+    <div class="entry">
+      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
+        <tr>
+          <td class="split-left">{{ item.title }}</td>
+          <td class="split-right">{{ item.date }}</td>
+        </tr>
+      </table>
+      {% if item.description %}<p class="entry-body">{{ item.description }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if languages or interests %}
+  <div class="section">
+    <p class="section-title">Additional Information</p>
+    {% if languages %}<p class="skills-line"><span class="skills-label">Languages:</span> {{ languages }}</p>{% endif %}
+    {% if interests %}<p class="skills-line"><span class="skills-label">Interests:</span> {{ interests }}</p>{% endif %}
   </div>
   {% endif %}
 </body>

@@ -32,6 +32,7 @@ from grounding import (
     sanitize_profile,
     strip_letter_claim_violations,
 )
+from letter_autofix import autofix_letter_prose, autofix_until_clean, finalize_letter_repairs
 from style_validator import scan_letter_style
 from ollama import (
     call_ollama,
@@ -51,6 +52,7 @@ from prompts.prompt_stage_3 import (
     LOOP_CLAIMS_SYSTEM,
     LOOP_GAPS_SYSTEM,
     LOOP_LETTER_PROSE_SYSTEM,
+    LOOP_SMOOTH_GAP_SYSTEM,
     PARSER_SECTIONS,
     VERIFICATION_SYSTEM,
     VERIFIED_SECTIONS,
@@ -59,6 +61,7 @@ from stage_2 import (
     KeywordPool,
     _split_name,
     build_master_keywords,
+    compose_location,
     keyword_prompt_block,
     polish_bullets,
     polish_text,
@@ -80,6 +83,7 @@ from utils import (
     export_json,
     enforce_max_words,
     count_words,
+    generation_options,
     load_config,
     load_json,
     profile_for_prompt,
@@ -106,11 +110,23 @@ def _honesty_settings(config: dict) -> dict[str, Any]:
         gap_index = int(raw.get("gap_paragraph_index", 2))
     except (TypeError, ValueError):
         gap_index = 2
+    try:
+        max_gaps = int(raw.get("max_gaps_in_letter", 3))
+    except (TypeError, ValueError):
+        max_gaps = 3
     return {
         "use_stage_2_claims": bool(raw.get("use_stage_2_claims", True)),
         "deterministic_gap_paragraph": bool(raw.get("deterministic_gap_paragraph", True)),
         "gap_paragraph_index": max(1, gap_index),
+        "smooth_gap_paragraph": bool(raw.get("smooth_gap_paragraph", True)),
+        "max_gaps_in_letter": max(1, max_gaps),
     }
+
+
+def _gaps_for_letter(config: dict, gaps_addressed: list[str]) -> list[str]:
+    """Cap how many gap disclosures reach the letter — full honesty stays in the JSON payload."""
+    cleaned = [str(item).strip() for item in gaps_addressed if str(item).strip()]
+    return cleaned[: _honesty_settings(config)["max_gaps_in_letter"]]
 
 
 def _style_verification_enabled(config: dict) -> bool:
@@ -178,6 +194,59 @@ def _parser_verification_settings(config: dict) -> dict[str, Any]:
     return config.get("stage_3", {}).get("parser_verification", {})
 
 
+def _parser_autofix_enabled(config: dict) -> bool:
+    return bool(config.get("stage_3", {}).get("parser_autofix", {}).get("enabled", True))
+
+
+def _apply_deterministic_letter_autofix(
+    config: dict,
+    app_key: str,
+    content: dict[str, Any],
+    body_count: int,
+    *,
+    aggressive: bool = False,
+) -> bool:
+    """Strip bad claims, label leaks, and opener collisions without another LLM call."""
+    if not _parser_autofix_enabled(config):
+        return False
+
+    gaps = content.get("gaps_addressed", [])
+    if not isinstance(gaps, list):
+        gaps = []
+    gaps = _gaps_for_letter(config, gaps)
+    skip = _gap_paragraph_skip_index(config)
+    max_words = _body_paragraph_max_words(config)
+
+    print(f"Stage 3 — {app_key}: applying deterministic letter auto-fix ...", file=sys.stderr)
+    if aggressive:
+        changed = autofix_until_clean(
+            content,
+            body_count,
+            gaps_addressed=gaps,
+            skip_body_indices=skip,
+            max_words=max_words,
+        )
+    else:
+        changed = autofix_letter_prose(
+            content,
+            body_count,
+            gaps_addressed=gaps,
+            skip_body_indices=skip,
+            max_words=max_words,
+        )
+        if finalize_letter_repairs(
+            content,
+            body_count,
+            max_words=max_words,
+            gaps_addressed=gaps,
+            skip_body_indices=skip,
+        ):
+            changed = True
+    if changed:
+        print(f"  auto-fix: letter prose patched (claims/style/labels)", file=sys.stderr)
+    return changed
+
+
 def _body_paragraph_count(config: dict) -> int:
     count = config.get("stage_3", {}).get("body_paragraphs", DEFAULT_BODY_PARAGRAPHS)
     try:
@@ -224,24 +293,24 @@ def _fix_paragraph_spacing(text: str) -> str:
     return result.strip()
 
 
+_SALUTATION_RE = re.compile(r"^\s*dear\s+[^,.:;\n]{1,60}[,.:;]\s*", re.IGNORECASE)
+
+
+def _strip_salutation(text: str) -> str:
+    """The template renders 'Dear <addressee>,' — remove any salutation the model baked into prose."""
+    return _SALUTATION_RE.sub("", str(text)).strip()
+
+
 def build_letter_header(profile: dict) -> dict[str, Any]:
     contact = profile.get("contact", {})
     first, last = _split_name(str(contact.get("name", "")))
-    parts = [
-        contact.get("address", ""),
-        contact.get("city", ""),
-        contact.get("state", ""),
-        contact.get("zip", ""),
-        contact.get("country", ""),
-    ]
-    address = ", ".join(str(part).strip() for part in parts if str(part).strip())
     return {
         "first_name": first,
         "last_name": last,
         "email": str(contact.get("email", "")).strip(),
         "linkedin": str(contact.get("linkedin", "")).strip(),
         "contact": str(contact.get("phone", "")).strip(),
-        "address": address,
+        "address": compose_location(contact),
     }
 
 
@@ -327,7 +396,7 @@ def _letter_guidance_block(
         "letter_guidance": {
             "claims_to_avoid": claims_to_avoid,
             "gaps_addressed": gaps_addressed,
-            "rules": [
+        "rules": [
                 "Never state or imply anything in claims_to_avoid.",
                 "Use gaps_addressed phrasing when acknowledging weaknesses — do not invent new gap language.",
             ],
@@ -364,9 +433,67 @@ def _letter_prose_snapshot(content: dict[str, Any], body_count: int) -> dict[str
 
 
 def _apply_letter_prose(content: dict[str, Any], prose: dict[str, Any], body_count: int) -> None:
-    content["opening_paragraph"] = _fix_paragraph_spacing(str(prose.get("opening_paragraph", "")))
+    content["opening_paragraph"] = _fix_paragraph_spacing(
+        _strip_salutation(str(prose.get("opening_paragraph", "")))
+    )
     content["body_paragraphs"] = _normalize_body_paragraphs(prose.get("body_paragraphs", []), body_count)
     content["closing_paragraph"] = _fix_paragraph_spacing(str(prose.get("closing_paragraph", "")))
+
+
+def _parse_smooth_gap_response(raw: str) -> str:
+    text = str(raw).strip()
+    text = re.sub(r"^(?:SMOOTHED|PARAGRAPH|BODY(?:_\d+)?)\s*:\s*", "", text, flags=re.IGNORECASE)
+    return _fix_paragraph_spacing(text)
+
+
+def smooth_gap_paragraph(
+    config: dict,
+    app_key: str,
+    raw_gap_text: str,
+    gaps_addressed: list[str],
+    max_words: int,
+    strengths: list[str] | None = None,
+) -> str:
+    """Rewrite a stitched gap-disclosure block into one cohesive paragraph."""
+    draft = _fix_paragraph_spacing(raw_gap_text)
+    if not draft or not _honesty_settings(config).get("smooth_gap_paragraph", True):
+        return draft
+
+    if draft.lower().count("i want to be upfront") < 2 and count_words(draft) <= max_words:
+        return draft
+
+    prompt = {
+        "task": (
+            "Rewrite draft_gap_paragraph into one smooth gap-disclosure paragraph "
+            "that preserves every limitation in gaps_to_preserve."
+        ),
+        "draft_gap_paragraph": draft,
+        "gaps_to_preserve": [str(item).strip() for item in gaps_addressed if str(item).strip()],
+        "word_limit": {
+            "max_words": max_words,
+            "rule": f"Hard limit: {max_words} words.",
+        },
+        "reply_format": "Plain text only — the paragraph itself, no label or commentary.",
+    }
+    if strengths:
+        prompt["strengths_context"] = [str(item).strip() for item in strengths if str(item).strip()][:2]
+    try:
+        raw = _call_loop(
+            config,
+            app_key,
+            "smooth gap disclosure paragraph",
+            LOOP_SMOOTH_GAP_SYSTEM,
+            prompt,
+            options=generation_options(config, "creative"),
+        )
+        smoothed = _parse_smooth_gap_response(raw)
+        if count_words(smoothed) >= 12:
+            smoothed, _ = enforce_max_words(smoothed, max_words)
+            print("  letter_prose: smoothed gap disclosure paragraph", file=sys.stderr)
+            return smoothed
+    except Exception as exc:
+        print(f"  warning: gap paragraph smooth failed: {exc}", file=sys.stderr)
+    return draft
 
 
 def _finalize_letter_prose(
@@ -374,19 +501,25 @@ def _finalize_letter_prose(
     config: dict,
     gaps_addressed: list[str],
     body_count: int,
+    *,
+    app_key: str | None = None,
+    strengths: list[str] | None = None,
 ) -> dict[str, Any]:
     max_words = _body_paragraph_max_words(config)
-    opening = str(prose.get("opening_paragraph", "")).strip()
+    opening = _strip_salutation(str(prose.get("opening_paragraph", "")).strip())
     body = _normalize_body_paragraphs(prose.get("body_paragraphs", []), body_count)
     closing = str(prose.get("closing_paragraph", "")).strip()
 
     honesty = _honesty_settings(config)
-    if honesty["deterministic_gap_paragraph"] and gaps_addressed:
+    letter_gaps = _gaps_for_letter(config, gaps_addressed)
+    if honesty["deterministic_gap_paragraph"] and letter_gaps:
         gap_index = honesty["gap_paragraph_index"]
         if 1 <= gap_index <= len(body):
-            gap_text = _fix_paragraph_spacing(
-                " ".join(str(item).strip() for item in gaps_addressed if str(item).strip())
-            )
+            gap_text = _fix_paragraph_spacing(" ".join(letter_gaps))
+            if app_key:
+                gap_text = smooth_gap_paragraph(
+                    config, app_key, gap_text, letter_gaps, max_words, strengths=strengths
+                )
             gap_text, was_trimmed = enforce_max_words(gap_text, max_words)
             if was_trimmed:
                 print(
@@ -450,7 +583,7 @@ def loop_letter_prose(
                 "resume_draft and claims_manifest are the source of truth from stage_2. "
                 "Do not contradict claims_to_avoid or overstate beyond gaps_addressed honesty level."
             ),
-            "candidate_cv": profile_for_prompt(profile),
+        "candidate_cv": profile_for_prompt(profile),
             **letter_guidance,
             **keyword_prompt_block(keyword_pool),
             "reply_format": (
@@ -468,9 +601,19 @@ def loop_letter_prose(
     elif isinstance(improvement, dict) and improvement.get("reviewer_feedback"):
         loop_name = "loop letter_prose (quality rewrite)"
 
-    raw = _call_loop(config, app_key, loop_name, LOOP_LETTER_PROSE_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        loop_name,
+        LOOP_LETTER_PROSE_SYSTEM,
+        prompt,
+        options=generation_options(config, "creative"),
+    )
     prose = parse_letter_prose(raw, body_count)
-    prose = _finalize_letter_prose(prose, config, gaps_addressed, body_count)
+    strengths = coerce_llm_string_list(stage2_entry.get("fit_review", {}), "strengths")
+    prose = _finalize_letter_prose(
+        prose, config, gaps_addressed, body_count, app_key=app_key, strengths=strengths
+    )
     guidance = letter_guidance.get("letter_guidance", {})
     temp = {
         **prose,
@@ -530,6 +673,8 @@ def _call_loop(
     loop_name: str,
     system: str,
     prompt: dict[str, Any],
+    *,
+    options: dict[str, Any] | None = None,
 ) -> str:
     print(f"Stage 3 — {app_key}: {loop_name} ...", file=sys.stderr)
     return call_ollama(
@@ -542,6 +687,7 @@ def _call_loop(
                 f"{PLAIN_TEXT_REPLY}"
             ),
         ),
+        options=options,
     )
 
 
@@ -585,7 +731,14 @@ def loop_claims_to_avoid(
         },
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 1 claims_to_avoid", LOOP_CLAIMS_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 1 claims_to_avoid",
+        LOOP_CLAIMS_SYSTEM,
+        prompt,
+        options=generation_options(config, "precise"),
+    )
     claims = polish_bullets(parse_ordered_lines(raw, len(gaps)))
     return [c for c in claims if c] if any(c for c in claims) else gaps
 
@@ -605,15 +758,22 @@ def loop_gaps_addressed(
     prompt = _prompt_with_improvement(
         {
             "task": "Write honest gap-addressing sentences for the letter.",
-            "gaps": gaps,
+        "gaps": gaps,
             "claims_to_avoid": claims_to_avoid,
             "fit_review": stage2_entry.get("fit_review", {}),
-            "candidate_cv": profile_for_prompt(profile),
+        "candidate_cv": profile_for_prompt(profile),
             "reply_format": "One honest first-person sentence per line, same order as gaps. Empty line = skip.",
         },
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 2 gaps_addressed", LOOP_GAPS_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 2 gaps_addressed",
+        LOOP_GAPS_SYSTEM,
+        prompt,
+        options=generation_options(config, "precise"),
+    )
     addressed = parse_ordered_lines(raw, len(gaps))
     return [
         _fix_paragraph_spacing(str(item))
@@ -624,7 +784,9 @@ def loop_gaps_addressed(
 
 def polish_letter_output(content: dict[str, Any], body_count: int | None = None) -> dict[str, Any]:
     if "opening_paragraph" in content:
-        content["opening_paragraph"] = _fix_paragraph_spacing(str(content.get("opening_paragraph", "")))
+        content["opening_paragraph"] = _fix_paragraph_spacing(
+            _strip_salutation(str(content.get("opening_paragraph", "")))
+        )
     if isinstance(content.get("body_paragraphs"), list):
         count = body_count if body_count is not None else len(content["body_paragraphs"])
         content["body_paragraphs"] = _normalize_body_paragraphs(content["body_paragraphs"], max(1, count))
@@ -887,6 +1049,9 @@ def _resolve_claim_violations_in_letter(
     if strip_letter_claim_violations(content, body_count, skip_body_indices=skip):
         print(f"  stripped sentence(s) echoing claims_to_avoid", file=sys.stderr)
 
+    if _apply_deterministic_letter_autofix(config, app_key, content, body_count):
+        return not letter_has_claim_violations(content)
+
     body = _normalize_body_paragraphs(content.get("body_paragraphs", []), body_count)
     needs_rewrite = (
         letter_has_claim_violations(content)
@@ -973,7 +1138,14 @@ def verify_letter(
             "sections_to_rate": list(sections_to_rate.keys()),
         }
         for attempt in range(2):
-            raw = _call_loop(config, app_key, "verification quality review", VERIFICATION_SYSTEM, prompt)
+            raw = _call_loop(
+                config,
+                app_key,
+                "verification quality review",
+                VERIFICATION_SYSTEM,
+                prompt,
+                options=generation_options(config, "precise"),
+            )
             fresh_review = parse_quality_review(raw, list(sections_to_rate.keys()))
 
             if expected_keys <= set(fresh_review.keys()):
@@ -1028,7 +1200,7 @@ def run_letter_section(
                 "prior_draft": _letter_prose_snapshot(content, body_count),
             }
         regenerate_letter_prose(
-            config,
+        config,
             app_key,
             stage1_entry,
             application,
@@ -1104,11 +1276,11 @@ def verify_and_refine_letter(
                 ),
             )
             regenerate_letter_prose(
-                config,
+            config,
                 app_key,
                 stage1_entry,
                 application,
-                profile,
+            profile,
                 stage2_entry,
                 content,
                 keyword_pool,
@@ -1190,6 +1362,28 @@ def parser_verify_and_regenerate_letter(
 
         prose_issues = _prose_parser_issues(issues_by_section)
         if prose_issues:
+            autofix_handled = False
+            if _parser_autofix_enabled(config):
+                _apply_deterministic_letter_autofix(config, app_key, content, body_count, aggressive=True)
+                meta = {key: content[key] for key in META_CONTENT_KEYS if key in content}
+                content.update(polish_letter_output(_content_without_meta(content), body_count))
+                content.update(meta)
+                scan_content = _content_without_meta(content)
+                if not _prose_parser_issues(
+                    parse_letter_issues(
+                        scan_content,
+                        body_count,
+                        has_gaps,
+                        max_body_words,
+                        style_check=style_check,
+                        config=config,
+                    )
+                ):
+                    print(f"Stage 3 — {app_key}: parser issues cleared by auto-fix", file=sys.stderr)
+                    autofix_handled = True
+            if autofix_handled:
+                continue
+
             claim_only = all(
                 "forbidden claim" in issue.lower() or "claims_ledger" in issue.lower()
                 for issue in prose_issues
@@ -1269,6 +1463,16 @@ def parser_verify_and_regenerate_letter(
     unresolved = parse_letter_issues(
         scan_content, body_count, has_gaps, max_body_words, style_check=style_check, config=config
     )
+    if unresolved and _prose_parser_issues(unresolved) and _parser_autofix_enabled(config):
+        _apply_deterministic_letter_autofix(config, app_key, content, body_count, aggressive=True)
+        meta = {key: content[key] for key in META_CONTENT_KEYS if key in content}
+        content.update(polish_letter_output(_content_without_meta(content), body_count))
+        content.update(meta)
+        scan_content = _content_without_meta(content)
+        unresolved = parse_letter_issues(
+            scan_content, body_count, has_gaps, max_body_words, style_check=style_check, config=config
+        )
+
     if unresolved and _prose_parser_issues(unresolved):
         claim_only = all(
             "forbidden claim" in issue.lower() or "claims_ledger" in issue.lower()
@@ -1422,8 +1626,7 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
 
     try:
         applications = load_json(apps_path)
-        profile = load_json(profile_path)
-        profile = sanitize_profile(profile)
+        profile = sanitize_profile(load_json(profile_path))
         stage1 = load_json(stage1_path)
         stage2 = load_json(stage2_path)
 

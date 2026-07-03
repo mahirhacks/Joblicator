@@ -16,6 +16,7 @@ if str(DYNAMIC_DIR) not in sys.path:
 
 from utils import load_config, load_json, resolve_output_path  # noqa: E402
 
+STAGE_1_DEFAULT = "engine/dynamic_engine/data/stage_1.json"
 STAGE_2_DEFAULT = "engine/dynamic_engine/data/stage_2.json"
 STAGE_3_DEFAULT = "engine/dynamic_engine/data/stage_3.json"
 
@@ -26,6 +27,12 @@ def load_template_settings() -> dict[str, Any]:
 
 def load_engine_config() -> dict[str, Any]:
     return load_config(DYNAMIC_DIR / "config.yaml")
+
+
+def load_stage_1(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or load_engine_config()
+    path = resolve_output_path(config, "stage_1", STAGE_1_DEFAULT)
+    return load_json(path)
 
 
 def load_stage_2(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -57,6 +64,8 @@ def split_header_and_application(
         "last_name",
         "email",
         "linkedin",
+        "github",
+        "portfolio",
         "contact",
         "address",
         "languages",

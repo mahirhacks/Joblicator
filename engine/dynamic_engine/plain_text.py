@@ -377,6 +377,6 @@ def parse_letter_prose(raw: str, body_count: int) -> dict[str, Any]:
 
 
 PLAIN_TEXT_REPLY = (
-    "Reply in plain text only, using exactly the output format in the system prompt. "
-    "No JSON, no markdown code fences, no commentary."
+    "Reply in plain text only, using exactly the output format and all writing rules "
+    "in the system prompt. No JSON, no markdown code fences, no commentary, no preamble."
 )

@@ -282,26 +282,67 @@ def terminate_ollama(config: dict) -> None:
         log_stderr("Ollama: could not confirm model unload (server may still hold weights)")
 
 
-def call_ollama(config: dict, messages: list[dict[str, str]]) -> str:
+def _generation_options(config: dict) -> dict[str, Any]:
+    generation = config.get("generation", {})
+    options: dict[str, Any] = {
+        "temperature": generation.get("temperature", 0.3),
+        "num_ctx": generation.get("context_window", 16384),
+    }
+
+    for key, caster in (("top_p", float), ("repeat_penalty", float), ("top_k", int)):
+        value = generation.get(key)
+        if value is None:
+            continue
+        try:
+            options[key] = caster(value)
+        except (TypeError, ValueError):
+            continue
+
+    try:
+        seed = int(generation.get("seed", 0))
+    except (TypeError, ValueError):
+        seed = 0
+    if seed > 0:
+        options["seed"] = seed
+
+    num_predict = generation.get("max_tokens", 4096)
+    try:
+        num_predict = int(num_predict)
+    except (TypeError, ValueError):
+        num_predict = 4096
+    if num_predict > 0:
+        options["num_predict"] = num_predict
+
+    return options
+
+
+def call_ollama(
+    config: dict,
+    messages: list[dict[str, str]],
+    *,
+    options: dict[str, Any] | None = None,
+) -> str:
     ensure_ollama_model(config)
 
     ollama = config.get("ollama", {})
-    generation = config.get("generation", {})
 
     base_url = ollama.get("base_url", "http://127.0.0.1:11434").rstrip("/")
     model = ollama.get("model", "")
+
+    payload_options = _generation_options(config)
+    if options:
+        payload_options.update({key: value for key, value in options.items() if value is not None})
 
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": {
-            "temperature": generation.get("temperature", 0.3),
-            "num_ctx": generation.get("context_window", 16384),
-        },
+        "options": payload_options,
     }
-    if ollama.get("think") is True:
-        payload["think"] = True
+
+    # Explicit false — some models (e.g. gemma4) emit chain-of-thought in `thinking`
+    # with empty `content` unless thinking is disabled at the API level.
+    payload["think"] = bool(ollama.get("think") is True)
 
     last_data: dict[str, Any] = {}
     last_raw = ""

@@ -11,6 +11,7 @@ _BANNED_REPEAT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bi am eager to\b", re.IGNORECASE), "I am eager to"),
     (re.compile(r"\bi am excited to\b", re.IGNORECASE), "I am excited to"),
     (re.compile(r"\bi am passionate about\b", re.IGNORECASE), "I am passionate about"),
+    (re.compile(r"\bi am writing to\b", re.IGNORECASE), "I am writing to"),
     (re.compile(r"\bmy aws certified\b", re.IGNORECASE), "My AWS Certified"),
     (re.compile(r"\bas a cybersecurity researcher\b", re.IGNORECASE), "As a cybersecurity researcher"),
 ]

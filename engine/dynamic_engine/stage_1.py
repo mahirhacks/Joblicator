@@ -42,6 +42,7 @@ from utils import (
     build_payload_header,
     dedupe_keywords,
     distribute_keyword_cap,
+    drop_placeholder_keywords,
     ensure_project_path,
     export_json,
     is_duplicate_keyword,
@@ -152,7 +153,7 @@ def loop2_section_keywords(
         ),
     )
 
-    keywords = parse_comma_list(raw, max_items=pick_count)
+    keywords = drop_placeholder_keywords(parse_comma_list(raw, max_items=pick_count))
     capped = append_unique_keywords([], keywords, pick_count)
     return dedupe_keywords(capped)
 

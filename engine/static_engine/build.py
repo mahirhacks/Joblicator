@@ -24,9 +24,16 @@ DYNAMIC_DIR = ENGINE_DIR.parent / "dynamic_engine"
 if str(DYNAMIC_DIR) not in sys.path:
     sys.path.insert(0, str(DYNAMIC_DIR))
 
+from ats_report import (  # noqa: E402
+    build_ats_report,
+    flatten_context_text,
+    format_ats_summary,
+    write_ats_report,
+)
 from loader import (  # noqa: E402
     list_application_keys,
     load_engine_config,
+    load_stage_1,
     load_stage_2,
     load_stage_3,
     load_template_settings,
@@ -128,6 +135,10 @@ def run() -> list[dict[str, Any]]:
     template_settings = load_template_settings()
     stage2 = load_stage_2(config)
     stage3 = load_stage_3(config)
+    try:
+        stage1 = load_stage_1(config)
+    except (FileNotFoundError, ValueError):
+        stage1 = {}
 
     failure_report = default_failure_report_path()
     if failure_report.is_file():
@@ -161,6 +172,20 @@ def run() -> list[dict[str, Any]]:
         assert_application_parser_passed(app_key, resume, stage_label="Stage 2")
         assert_application_parser_passed(app_key, letter, stage_label="Stage 3")
         outputs = build_application_documents(app_key, header, resume, letter, template_settings)
+
+        stage1_entry = stage1.get(app_key)
+        if isinstance(stage1_entry, dict):
+            cv_text = flatten_context_text(build_cv_context(header, resume))
+            letter_text = flatten_context_text(build_cover_letter_context(header, letter))
+            report = build_ats_report(stage1_entry, config, cv_text, letter_text)
+            cv_html_path = outputs.get("cv_html")
+            if cv_html_path is not None:
+                report_path = cv_html_path.with_name(
+                    cv_html_path.name.replace("_cv.html", "_ats_report.json")
+                )
+                outputs["ats_report"] = write_ats_report(report, report_path)
+            print(format_ats_summary(app_key, report), file=sys.stderr)
+
         results.append({"application": app_key, "outputs": outputs})
         print(f"Built {app_key} -> {outputs.get('cv_pdf', outputs.get('cv_html'))}", file=sys.stderr)
 

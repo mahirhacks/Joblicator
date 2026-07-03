@@ -115,17 +115,33 @@ def _format_date_range(start: str, end: str) -> str:
     return end_text
 
 
+def _display_url(url: str) -> str:
+    """Human-readable link text: strip scheme, www, and trailing slash."""
+    text = str(url).strip()
+    text = re.sub(r"^https?://", "", text)
+    text = re.sub(r"^www\.", "", text)
+    return text.rstrip("/")
+
+
 def _contact_block(header: dict[str, Any]) -> dict[str, str]:
     first = str(header.get("first_name", "")).strip()
     last = str(header.get("last_name", "")).strip()
     name = f"{first} {last}".strip()
+    linkedin = str(header.get("linkedin", "")).strip()
+    github = str(header.get("github", "")).strip()
+    portfolio = str(header.get("portfolio", "")).strip()
     return {
         "name": name,
         "first_name": first,
         "last_name": last,
         "email": str(header.get("email", "")).strip(),
         "phone": str(header.get("contact", "")).strip(),
-        "linkedin": str(header.get("linkedin", "")).strip(),
+        "linkedin": linkedin,
+        "linkedin_display": _display_url(linkedin),
+        "github": github,
+        "github_display": _display_url(github),
+        "portfolio": portfolio,
+        "portfolio_display": _display_url(portfolio),
         "address": str(header.get("address", "")).strip(),
     }
 
@@ -179,6 +195,17 @@ def _infer_headline(work_experience: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _clean_inline_list(text: str) -> str:
+    """Normalize cramped comma/paren spacing: 'A(B,C)' -> 'A (B, C)'."""
+    if not text:
+        return ""
+    result = re.sub(r"\s*,\s*", ", ", text)
+    result = re.sub(r"(\w)\(", r"\1 (", result)
+    result = re.sub(r"\(\s+", "(", result)
+    result = re.sub(r"\s+\)", ")", result)
+    return re.sub(r"\s{2,}", " ", result).strip()
+
+
 def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dict[str, Any]:
     skills: list[dict[str, Any]] = []
     raw_skills = application.get("skills", {})
@@ -217,7 +244,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
                 "degree_rest": rest.strip(),
                 "degree_line": degree_line,
                 "dates": _format_date_range(str(item.get("start_date", "")), str(item.get("end_date", ""))),
-                "courses": str(item.get("courses", "")).strip(),
+                "courses": _clean_inline_list(str(item.get("courses", "")).strip()),
                 "gpa": str(item.get("cgpa", item.get("gpa", ""))).strip(),
             }
         )
@@ -282,13 +309,37 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
             }
         )
 
+    achievements: list[dict[str, Any]] = []
+    work_titles = [
+        str(job.get("title", "")).strip().lower()
+        for job in work_experience
+        if len(str(job.get("title", "")).split()) >= 2
+    ]
+    for item in _sort_dict_items(application.get("achievements", {})):
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        # A role already listed under Work Experience is not an "achievement" — skip the duplicate.
+        if any(title and title in name.lower() for title in work_titles):
+            continue
+        achievements.append(
+            {
+                "title": name,
+                "description": str(item.get("description", "")).strip(),
+                "date": _format_month(str(item.get("date", ""))),
+            }
+        )
+
     interests = application.get("interests", [])
     if not isinstance(interests, list):
         interests = []
 
+    # The headline is the strongest ATS job-title-match signal — prefer the target role.
+    headline = str(application.get("role_title", "")).strip() or _infer_headline(work_experience)
+
     return {
         "contact": _contact_block(header),
-        "headline": _infer_headline(work_experience),
+        "headline": headline,
         "summary": str(application.get("executive_summary", "")).strip(),
         "work_experience": work_experience,
         "projects": projects,
@@ -299,6 +350,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
         "education": education,
         "languages": _languages_inline(header),
         "certifications": certifications,
+        "achievements": achievements,
         "interests": ", ".join(str(item).strip() for item in interests if str(item).strip()),
     }
 

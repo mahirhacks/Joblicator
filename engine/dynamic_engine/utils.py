@@ -95,6 +95,24 @@ def ensure_project_path() -> None:
         sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def generation_options(config: dict, kind: str) -> dict[str, Any]:
+    """Per-loop-type sampling overrides: 'creative' for prose, 'precise' for reviews/parsing."""
+    generation = config.get("generation", {})
+    key = {
+        "creative": "creative_temperature",
+        "precise": "precise_temperature",
+    }.get(kind)
+    if not key:
+        return {}
+    value = generation.get(key)
+    if value is None:
+        return {}
+    try:
+        return {"temperature": float(value)}
+    except (TypeError, ValueError):
+        return {}
+
+
 def application_text(application: dict) -> str:
     about = application.get("about", "")
     description = application.get("description", "")
@@ -164,6 +182,17 @@ def dedupe_keywords(keywords: list[str]) -> list[str]:
             seen.add(norm)
             result.append(text)
     return result
+
+
+_PLACEHOLDER_KEYWORD_RE = re.compile(
+    r"^(?:n/?a$|none\b|not\s|no\s|nothing\b|unspecified\b|unknown\b|missing\b)",
+    re.IGNORECASE,
+)
+
+
+def drop_placeholder_keywords(keywords: list[str]) -> list[str]:
+    """Remove LLM refusal text masquerading as keywords ('N/A', 'No certifications mentioned', ...)."""
+    return [kw for kw in keywords if kw.strip() and not _PLACEHOLDER_KEYWORD_RE.match(kw.strip())]
 
 
 def _keyword_tokens(text: str) -> list[str]:
@@ -358,6 +387,7 @@ def build_quality_improvement_block(
     instruction = (
         f"Rewrite the {section} section addressing reviewer_feedback "
         "and every item in previous_reviewer_feedback that still applies. "
+        "Follow all guardrails in the system prompt. "
         "Do not repeat mistakes called out in earlier review rounds."
     )
     if extra_rules:

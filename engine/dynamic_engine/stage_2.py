@@ -83,8 +83,10 @@ from utils import (
     build_quality_improvement_block,
     build_sources,
     dedupe_keywords,
+    drop_placeholder_keywords,
     ensure_project_path,
     export_json,
+    generation_options,
     load_config,
     load_json,
     profile_for_prompt,
@@ -106,7 +108,18 @@ STAGE_1_DEFAULT = "engine/dynamic_engine/data/stage_1.json"
 STAGE_2_DEFAULT = "engine/dynamic_engine/data/stage_2.json"
 META_KEYS = frozenset({"generated_at", "sources"})
 STATIC_KEYS = frozenset(
-    {"first_name", "last_name", "email", "linkedin", "contact", "address", "languages", "education"}
+    {
+        "first_name",
+        "last_name",
+        "email",
+        "linkedin",
+        "github",
+        "portfolio",
+        "contact",
+        "address",
+        "languages",
+        "education",
+    }
 )
 ACHIEVEMENT_BAD_KEYS = frozenset(
     {
@@ -234,7 +247,8 @@ def build_master_keywords(
     for values in resume_keywords.values():
         if not isinstance(values, list):
             continue
-        for original, synonyms in _iter_section_keyword_groups(values, max_synonym):
+        cleaned = drop_placeholder_keywords([str(item) for item in values])
+        for original, synonyms in _iter_section_keyword_groups(cleaned, max_synonym):
             orig_key = _normalize_term_key(original)
             if not orig_key or orig_key in seen_originals:
                 continue
@@ -315,6 +329,14 @@ def polish_bullets(bullets: list[str]) -> list[str]:
     return dedupe_keywords([item for item in cleaned if item])
 
 
+def capitalize_title(text: str) -> str:
+    """Uppercase the first letter of an entry title without touching the rest (acronym-safe)."""
+    cleaned = str(text).strip()
+    if cleaned and cleaned[0].islower():
+        return cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
+
 def polish_skill_subskills(subskills: list[str]) -> list[str]:
     expanded: list[str] = []
     for term in subskills:
@@ -332,7 +354,8 @@ def trace_keywords_in_text(text: str, keywords: list[str]) -> list[str]:
         norm = keyword.lower()
         if norm in used_lower:
             continue
-        if norm in haystack:
+        # Word-boundary match — bare substring check made "KG" match inside "background".
+        if re.search(rf"(?<!\w){re.escape(norm)}(?!\w)", haystack):
             used.append(keyword)
             used_lower.add(norm)
 
@@ -526,25 +549,35 @@ def _build_education(profile: dict) -> dict[str, dict[str, str]]:
     return education
 
 
+def compose_location(contact: dict[str, Any]) -> str:
+    """Recruiter-style location line: 'City, Country' — dedupes overlapping region parts, drops zip."""
+    parts: list[str] = []
+    for key in ("city", "address", "state", "country"):
+        value = str(contact.get(key, "")).strip()
+        if not value:
+            continue
+        lower = value.lower()
+        if any(kept.lower() in lower or lower in kept.lower() for kept in parts):
+            continue
+        parts.append(value)
+    if parts:
+        return ", ".join(parts)
+    return str(contact.get("address", "")).strip()
+
+
 def build_static_header(profile: dict) -> dict[str, Any]:
     contact = profile.get("contact", {})
     first, last = _split_name(str(contact.get("name", "")))
-    parts = [
-        contact.get("address", ""),
-        contact.get("city", ""),
-        contact.get("state", ""),
-        contact.get("zip", ""),
-        contact.get("country", ""),
-    ]
-    address = ", ".join(str(p).strip() for p in parts if str(p).strip())
 
     return {
         "first_name": first,
         "last_name": last,
         "email": str(contact.get("email", "")).strip(),
         "linkedin": str(contact.get("linkedin", "")).strip(),
+        "github": str(contact.get("github", "")).strip(),
+        "portfolio": str(contact.get("portfolio", "")).strip(),
         "contact": str(contact.get("phone", "")).strip(),
-        "address": address,
+        "address": compose_location(contact),
         "languages": _build_languages(profile),
         "education": _build_education(profile),
     }
@@ -587,6 +620,8 @@ def _call_loop(
     loop_name: str,
     system: str,
     prompt: dict[str, Any],
+    *,
+    options: dict[str, Any] | None = None,
 ) -> str:
     print(f"Stage 2 — {app_key}: {loop_name} ...", file=sys.stderr)
     return call_ollama(
@@ -599,6 +634,7 @@ def _call_loop(
                 f"{PLAIN_TEXT_REPLY}"
             ),
         ),
+        options=options,
     )
 
 
@@ -631,7 +667,14 @@ def loop1_fit_review(
         },
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 1 fit_review", LOOP_1_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 1 fit_review",
+        LOOP_1_SYSTEM,
+        prompt,
+        options=generation_options(config, "precise"),
+    )
     return _parse_fit_review(raw)
 
 
@@ -654,13 +697,22 @@ def loop2_executive_summary(
                 "fit_review": fit_review,
                 "candidate_cv": profile_for_prompt(profile),
                 **keyword_prompt_block(keyword_pool),
-                "reply_format": "Plain text paragraph only (3-4 sentences, first person) — see system prompt.",
+                "reply_format": (
+                    "Plain text paragraph only (3-4 sentences, pronoun-free implied first person) — see system prompt."
+                ),
             },
             claims_guidance,
         ),
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 2 executive_summary", LOOP_2_EXECUTIVE_SUMMARY_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 2 executive_summary",
+        LOOP_2_EXECUTIVE_SUMMARY_SYSTEM,
+        prompt,
+        options=generation_options(config, "creative"),
+    )
     summary = parse_plain_paragraph(raw)
 
     used = keyword_pool.deduct_from_text(summary)
@@ -861,6 +913,18 @@ def polish_application_output(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _drop_domain_echo_subskills(category: str, subskills: list[str]) -> list[str]:
+    """Drop sub-skills that just repeat the domain name ('Security' under 'Security Operations')."""
+    category_tokens = {token for token in _normalize_term_key(category).split() if len(token) > 2}
+    kept: list[str] = []
+    for skill in subskills:
+        skill_tokens = {token for token in _normalize_term_key(skill).split() if token}
+        if skill_tokens and skill_tokens <= category_tokens:
+            continue
+        kept.append(skill)
+    return kept
+
+
 def _coerce_skills_map(parsed: Any, skills_settings: dict[str, int]) -> dict[str, list[str]]:
     domain_count = skills_settings["domain_count"]
     subskill_min = skills_settings["subskill_min"]
@@ -873,6 +937,7 @@ def _coerce_skills_map(parsed: Any, skills_settings: dict[str, int]) -> dict[str
         if not category:
             continue
         subskills = polish_skill_subskills(vals)
+        subskills = _drop_domain_echo_subskills(category, subskills)
         if not subskills:
             continue
         skills[category] = subskills[:subskill_max]
@@ -955,11 +1020,12 @@ def loop2_work_experience_entry(
         loop_name,
         INTERLOOP_SYSTEMS[LOOP_2_WORK_EXPERIENCE_SYSTEM_KEY],
         prompt,
+        options=generation_options(config, "creative"),
     )
     parsed = parse_work_experience_entry(raw, experience)
     points = parsed.get("points", [])
     entry = {
-        "title": polish_text(parsed.get("title", "") or str(experience.get("position", ""))),
+        "title": capitalize_title(polish_text(parsed.get("title", "") or str(experience.get("position", "")))),
         "company": polish_text(parsed.get("company", "") or str(experience.get("company", ""))),
         "start_date": _format_month(parsed.get("start_date", "") or str(experience.get("startDate", ""))),
         "end_date": _format_month(parsed.get("end_date", "") or str(experience.get("endDate", ""))),
@@ -1042,10 +1108,11 @@ def loop2_project_entry(
         loop_name,
         INTERLOOP_SYSTEMS[LOOP_2_PROJECTS_SYSTEM_KEY],
         prompt,
+        options=generation_options(config, "creative"),
     )
     parsed = parse_project_entry(raw, project)
     entry = {
-        "title": polish_text(parsed.get("title", "") or str(project.get("name", ""))),
+        "title": capitalize_title(polish_text(parsed.get("title", "") or str(project.get("name", "")))),
         "description": polish_text(parsed.get("description", "") or str(project.get("description", ""))),
         "start_date": _format_month(parsed.get("start_date", "") or str(project.get("startDate", ""))),
         "end_date": _format_month(parsed.get("end_date", "") or str(project.get("endDate", ""))),
@@ -1130,7 +1197,14 @@ def loop2_skills(
         ),
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 2 skills", LOOP_2_SKILLS_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 2 skills",
+        LOOP_2_SKILLS_SYSTEM,
+        prompt,
+        options=generation_options(config, "precise"),
+    )
     parsed = {"skills": parse_skills_domains(raw)}
     skills = _coerce_skills_map(parsed, skills_settings)
     grounding = _grounding_settings(config)
@@ -1185,6 +1259,7 @@ def loop2_achievement_entry(
         loop_name,
         INTERLOOP_SYSTEMS[LOOP_2_ACHIEVEMENTS_SYSTEM_KEY],
         prompt,
+        options=generation_options(config, "precise"),
     )
     parsed = parse_achievement_entry(raw, achievement)
     if _is_valid_achievement_entry(parsed):
@@ -1280,7 +1355,14 @@ def loop2_certifications(
         ),
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 2 certifications", LOOP_2_CERTIFICATIONS_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 2 certifications",
+        LOOP_2_CERTIFICATIONS_SYSTEM,
+        prompt,
+        options=generation_options(config, "precise"),
+    )
     parsed = {"certifications": parse_certifications(raw)}
     certifications = _coerce_certifications(parsed, profile.get("certifications", {}))
 
@@ -1317,7 +1399,14 @@ def loop2_volunteer(
         },
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 2 volunteer_experience", LOOP_2_VOLUNTEER_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 2 volunteer_experience",
+        LOOP_2_VOLUNTEER_SYSTEM,
+        prompt,
+        options=generation_options(config, "precise"),
+    )
     if clean_raw(raw).upper() == "NONE":
         return {}
     records = parse_volunteer(raw)
@@ -1357,7 +1446,14 @@ def loop2_interests(
         },
         improvement,
     )
-    raw = _call_loop(config, app_key, "loop 2 interests", LOOP_2_INTERESTS_SYSTEM, prompt)
+    raw = _call_loop(
+        config,
+        app_key,
+        "loop 2 interests",
+        LOOP_2_INTERESTS_SYSTEM,
+        prompt,
+        options=generation_options(config, "precise"),
+    )
     interests = parse_comma_list(raw)
     if isinstance(profile.get("interests"), dict) and not interests:
         interests = [str(k).strip() for k in profile["interests"] if str(k).strip()]
@@ -1460,7 +1556,14 @@ def verify_application(
             ),
             "sections_to_rate": list(sections_to_rate.keys()),
         }
-        raw = _call_loop(config, app_key, "verification quality review", VERIFICATION_SYSTEM, prompt)
+        raw = _call_loop(
+            config,
+            app_key,
+            "verification quality review",
+            VERIFICATION_SYSTEM,
+            prompt,
+            options=generation_options(config, "precise"),
+        )
         fresh_review = parse_quality_review(raw, list(sections_to_rate))
         for key, item in fresh_review.items():
             item["feedback"] = polish_text(item.get("feedback", ""))
@@ -2194,6 +2297,7 @@ def _generate_application_content(
         polish_application_output(
             {
                 "fit_review": fit_review,
+                "role_title": str(stage1_entry.get("title", application.get("title", ""))).strip(),
                 "claims_to_avoid": claims_to_avoid,
                 "gaps_addressed": gaps_addressed,
                 "claims_ledger": claims_ledger,

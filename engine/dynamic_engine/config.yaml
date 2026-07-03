@@ -1,40 +1,37 @@
-# Dynamic engine — local Ollama LLM settings
-
 ollama:
   base_url: http://127.0.0.1:11434
-  model: deepseek-r1:14b
+  model: gemma4:26b
   think: false
   auto_start: true
-
 generation:
-  temperature: 0.5
-  context_window: 16384
-
+  temperature: 0.5             # default for uncategorized calls
+  creative_temperature: 0.65   # prose drafting (summary, bullets, letter body)
+  precise_temperature: 0.2     # reviews, scoring, claims, structured formatting
+  context_window: 16384        # stage-3 prompts overflow 8192 and truncate silently
+  top_p: 0.9
+  repeat_penalty: 1.1
+  seed: 0                      # >0 = reproducible sampling
 applications:
   json: applications/local_applications.json
-
 profile:
   json: settings/local_profile.json
-
 loops:
   max_keywords_total: 30
-
 stages:
   stage_1: engine/dynamic_engine/data/stage_1.json
   stage_2: engine/dynamic_engine/data/stage_2.json
   stage_3: engine/dynamic_engine/data/stage_3.json
-
 stage_2:
   keywords:
-    max_original_keyword: 7
+    max_original_keyword: 30   # feed all stage-1 groups to stage 2 — 7 starved ATS coverage
     max_synonym_keyword_per_original_keyword: 2
   grounding:
     skills_from_profile_only: true
     enforce_claims_manifest: true
   skills:
     domain_count: 5
-    subskill_min: 1
-    subskill_max: 3
+    subskill_min: 3
+    subskill_max: 6
   certifications:
     description_min_chars: 24
   style_verification:
@@ -42,25 +39,28 @@ stage_2:
   verification:
     enabled: true
     min_quality: 7
-    max_passes: 4
+    max_passes: 2
   parser_verification:
     enabled: true
-    max_passes: 3
-
+    max_passes: 2
 stage_3:
-  body_paragraphs: 2
+  body_paragraphs: 3
   body_paragraph:
-    max_words: 120
+    max_words: 100
   honesty:
     use_stage_2_claims: true
     deterministic_gap_paragraph: true
-    gap_paragraph_index: 2
+    gap_paragraph_index: 3
+    smooth_gap_paragraph: true
+    max_gaps_in_letter: 3
   style_verification:
     enabled: true
   verification:
     enabled: true
     min_quality: 7
-    max_passes: 3
+    max_passes: 2
   parser_verification:
     enabled: true
     max_passes: 2
+  parser_autofix:
+    enabled: true
