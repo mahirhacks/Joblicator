@@ -87,10 +87,45 @@ def _iter_keyword_groups(
     return groups
 
 
+def _group_dedupe_key(group: list[str]) -> str:
+    terms = " ".join(group).casefold()
+    if "osint" in terms or "open source intelligence" in terms or "open-source intelligence" in terms:
+        return "osint"
+    return group[0].casefold() if group else ""
+
+
 def keyword_groups_from_stage1(
     stage1_entry: dict[str, Any],
     config: dict[str, Any],
 ) -> list[list[str]]:
+    structured = stage1_entry.get("resume_keyword_groups", {})
+    if isinstance(structured, dict) and structured:
+        seen: set[str] = set()
+        groups: list[list[str]] = []
+        for values in structured.values():
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                original = str(item.get("original", "")).strip()
+                variants = item.get("variants", [])
+                if not original or _PLACEHOLDER_KEYWORD_RE.match(original):
+                    continue
+                key = original.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                group = [original]
+                if isinstance(variants, list):
+                    group.extend(
+                        str(value).strip()
+                        for value in variants
+                        if str(value).strip()
+                    )
+                groups.append(group)
+        return groups
+
     resume_keywords = stage1_entry.get("resume_keywords", {})
     if not isinstance(resume_keywords, dict):
         return []
@@ -102,7 +137,7 @@ def keyword_groups_from_stage1(
         if not isinstance(values, list):
             continue
         for group in _iter_keyword_groups(values, synonyms):
-            key = group[0].lower()
+            key = _group_dedupe_key(group)
             if key in seen:
                 continue
             seen.add(key)
@@ -149,11 +184,61 @@ def _term_in_text(term: str, text: str) -> bool:
     return re.search(term_pattern(term), text, re.IGNORECASE) is not None
 
 
+def _semantic_term_in_text(term: str, text: str) -> bool:
+    """Recognize only narrow, lossless ATS equivalences missed by phrase matching."""
+    if _term_in_text(term, text):
+        return True
+    term_tokens = set(_tokens(term))
+    text_tokens = set(_tokens(text))
+
+    if "azure" in term_tokens and "azure" in text_tokens:
+        return True
+    if "owasp" in term_tokens and "owasp" in text_tokens:
+        return True
+    if (
+        ("osint" in term_tokens or {"open", "source", "intelligence"}.issubset(term_tokens))
+        and ("osint" in text_tokens or {"open", "source", "intelligence"}.issubset(text_tokens))
+    ):
+        return True
+
+    if {"web", "api"}.issubset(term_tokens):
+        text_has_web_api = {"web", "api"}.issubset(text_tokens)
+        text_has_testing = any(
+            token.startswith(("test", "pentest", "penetr")) for token in text_tokens
+        )
+        term_has_testing = any(
+            token.startswith(("test", "pentest", "penetr")) for token in term_tokens
+        )
+        if text_has_web_api and text_has_testing and term_has_testing:
+            return True
+    if {"application", "security"}.issubset(term_tokens) and any(
+        token.startswith("test") for token in term_tokens
+    ):
+        text_has_application = "application" in text_tokens
+        text_has_security_work = any(
+            token.startswith(("test", "pentest", "penetr")) for token in text_tokens
+        )
+        if text_has_application and text_has_security_work and "security" in text_tokens:
+            return True
+    return False
+
+
+def _supported_group(group: list[str], text: str) -> list[str] | None:
+    """Return a group relabelled by the candidate-supported term, or None."""
+    for term in group:
+        if _term_in_text(term, text):
+            return [term, *[item for item in group if item != term]]
+    for term in group:
+        if _semantic_term_in_text(term, text):
+            return [term, *[item for item in group if item != term]]
+    return None
+
+
 def _coverage(groups: list[list[str]], text: str) -> dict[str, Any]:
     covered: list[str] = []
     missing: list[str] = []
     for group in groups:
-        if any(_term_in_text(term, text) for term in group):
+        if any(_semantic_term_in_text(term, text) for term in group):
             covered.append(group[0])
         else:
             missing.append(group[0])
@@ -173,11 +258,25 @@ def build_ats_report(
     config: dict[str, Any],
     cv_text: str,
     letter_text: str,
+    candidate_text: str = "",
 ) -> dict[str, Any]:
-    groups = keyword_groups_from_stage1(stage1_entry, config)
+    all_groups = keyword_groups_from_stage1(stage1_entry, config)
+    groups = all_groups
+    excluded: list[str] = []
+    if candidate_text.strip():
+        groups = []
+        for group in all_groups:
+            supported = _supported_group(group, candidate_text)
+            if supported:
+                groups.append(supported)
+            else:
+                excluded.append(group[0])
     combined = f"{cv_text}\n{letter_text}"
     return {
         "job_title": str(stage1_entry.get("title", "")).strip(),
+        "job_keyword_groups": len(all_groups),
+        "eligible_keyword_groups": len(groups),
+        "excluded_unsupported": excluded,
         "cv": _coverage(groups, cv_text),
         "cover_letter": _coverage(groups, letter_text),
         "combined": _coverage(groups, combined),
@@ -198,7 +297,7 @@ def format_ats_summary(app_key: str, report: dict[str, Any]) -> str:
     if missing and len(missing) > 6:
         missing_note += ", …"
     return (
-        f"ATS coverage {app_key}: CV {cv.get('covered_count', 0)}/{cv.get('total_keyword_groups', 0)} "
+        f"Grounded ATS coverage {app_key}: CV {cv.get('covered_count', 0)}/{cv.get('total_keyword_groups', 0)} "
         f"({cv.get('coverage_pct', 0)}%) | letter {letter.get('covered_count', 0)}/"
         f"{letter.get('total_keyword_groups', 0)} ({letter.get('coverage_pct', 0)}%)"
         f"{missing_note}"

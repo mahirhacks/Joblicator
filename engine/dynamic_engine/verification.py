@@ -48,8 +48,6 @@ def format_parser_failures(app_key: str, stage_label: str, failures: dict[str, l
 
 
 def fail_on_unresolved_enabled(config: dict, stage_key: str) -> bool:
-    if stage_key == "stage_3":
-        return False
     return bool(config.get(stage_key, {}).get("parser_verification", {}).get("fail_on_unresolved", True))
 
 

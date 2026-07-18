@@ -14,6 +14,12 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from engine.template_contract import normalize_layout, resolve_cv_template
+
 from store import (
     DYNAMIC_ENGINE,
     ROOT,
@@ -281,7 +287,7 @@ def update_job(slug: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     apps[slug] = record
     save_applications(apps)
 
-    if "status" in body or "notes" in body:
+    if "status" in body or "notes" in body or "cv_template_id" in body:
         status = body.get("status")
         if status is not None and status not in VALID_STATUSES:
             return _json_response(400, {"error": f"Invalid status. Use one of: {sorted(VALID_STATUSES)}"})
@@ -289,6 +295,11 @@ def update_job(slug: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             slug,
             status=status if status is not None else None,
             notes=str(body.get("notes", "")).strip() if "notes" in body else None,
+            cv_template_id=(
+                resolve_cv_template(ROOT, template_id=str(body.get("cv_template_id", "")).strip())["id"]
+                if "cv_template_id" in body
+                else None
+            ),
         )
 
     return _json_response(
@@ -364,6 +375,7 @@ def list_applications_view() -> tuple[int, dict[str, Any]]:
         meta = get_application_meta(slug)
         out = resolve_output_for_slug(slug)
         phases = _pipeline_phases(slug)
+        generation_outcomes = _pipeline_outcomes(slug)
         items.append(
             {
                 "slug": slug,
@@ -372,7 +384,9 @@ def list_applications_view() -> tuple[int, dict[str, Any]]:
                 "location": record.get("location", ""),
                 "status": meta.get("status", "unsubmitted"),
                 "notes": meta.get("notes", ""),
+                "cv_template_id": meta.get("cv_template_id", ""),
                 "phases": phases,
+                "generation_outcomes": generation_outcomes,
                 "has_output": bool(out),
                 "output_folder": out["folder"] if out else None,
                 "files": out["files"] if out else [],
@@ -385,6 +399,23 @@ def list_outputs() -> tuple[int, dict[str, Any]]:
     return _json_response(200, {"outputs": list_output_folders()})
 
 
+def _review_identity(stage2: dict[str, Any]) -> dict[str, Any]:
+    """Return the shared profile fields needed by the structured document preview."""
+    fields = (
+        "first_name",
+        "last_name",
+        "email",
+        "contact",
+        "address",
+        "linkedin",
+        "github",
+        "portfolio",
+        "languages",
+        "education",
+    )
+    return {field: stage2.get(field) for field in fields if field in stage2}
+
+
 def get_review(slug: str) -> tuple[int, dict[str, Any]]:
     apps = load_applications()
     if slug not in apps:
@@ -394,17 +425,20 @@ def get_review(slug: str) -> tuple[int, dict[str, Any]]:
     stage3 = _read_stage_file("stage_3")
     app_key = _resolve_app_key(slug, stage2)
     output = resolve_output_for_slug(slug)
+    cv_template = resolve_cv_template(ROOT, slug=slug)
     if not app_key:
         return _json_response(
             200,
             {
                 "slug": slug,
                 "application": apps[slug],
+                "identity": _review_identity(stage2),
                 "stage_2": None,
                 "stage_3": None,
                 "output": output,
                 "output_folder": output["folder"] if output else None,
                 "files": output["files"] if output else [],
+                "cv_template": cv_template,
                 "message": "No generated content yet. Run Generate first.",
             },
         )
@@ -415,11 +449,13 @@ def get_review(slug: str) -> tuple[int, dict[str, Any]]:
             "slug": slug,
             "app_key": app_key,
             "application": apps[slug],
+            "identity": _review_identity(stage2),
             "stage_2": stage2.get(app_key),
             "stage_3": stage3.get(app_key),
             "output": output,
             "output_folder": output["folder"] if output else None,
             "files": output["files"] if output else [],
+            "cv_template": cv_template,
             **get_application_meta(slug),
         },
     )
@@ -547,12 +583,20 @@ def rebuild_application(slug: str, body: dict[str, Any] | None = None) -> tuple[
 def list_templates() -> tuple[int, dict[str, Any]]:
     catalog = load_template_settings()
     custom = load_custom_templates()
+    cv_catalog = {
+        key: value for key, value in catalog.get("catalog", {}).items()
+        if isinstance(value, dict) and value.get("category") == "cv"
+    }
+    cv_custom = {
+        key: value for key, value in custom.get("templates", {}).items()
+        if isinstance(value, dict) and value.get("category", "cv") == "cv"
+    }
     return _json_response(
         200,
         {
             "defaults": catalog.get("defaults", {}),
-            "catalog": catalog.get("catalog", {}),
-            "custom": custom.get("templates", {}),
+            "catalog": cv_catalog,
+            "custom": cv_custom,
             "export": catalog.get("export", {}),
         },
     )
@@ -563,31 +607,42 @@ def get_template(template_id: str) -> tuple[int, dict[str, Any]]:
     custom = load_custom_templates().get("templates", {})
     if template_id in catalog:
         entry = dict(catalog[template_id])
-        path = ROOT / str(entry.get("path", ""))
-        entry["source"] = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if entry.get("category") != "cv":
+            return _json_response(404, {"error": f"CV template not found: {template_id}"})
+        entry["layout"] = normalize_layout(entry.get("layout"))
         entry["builtin"] = True
         return _json_response(200, {"id": template_id, **entry})
     if template_id in custom:
-        return _json_response(200, {"id": template_id, "builtin": False, **custom[template_id]})
+        entry = dict(custom[template_id])
+        if entry.get("category", "cv") != "cv":
+            return _json_response(404, {"error": f"CV template not found: {template_id}"})
+        entry["layout"] = normalize_layout(entry.get("layout"))
+        return _json_response(200, {"id": template_id, "builtin": False, **entry})
     return _json_response(404, {"error": f"Template not found: {template_id}"})
 
 
 def save_template(template_id: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    catalog = load_template_settings().get("catalog", {})
-    if template_id in catalog and body.get("source"):
-        path = ROOT / str(catalog[template_id].get("path", ""))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(body["source"]), encoding="utf-8")
+    settings = load_template_settings()
+    catalog = settings.get("catalog", {})
+    if template_id in catalog:
+        entry = catalog[template_id]
+        if entry.get("category") != "cv":
+            return _json_response(400, {"error": "Cover-letter templates are not editable."})
+        entry["name"] = str(body.get("name", entry.get("name", template_id))).strip() or template_id
+        entry["description"] = str(body.get("description", entry.get("description", "")))
+        entry["layout"] = normalize_layout(body.get("layout"))
+        template_settings_path().write_text(
+            json.dumps(settings, indent=4, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
         return _json_response(200, {"ok": True, "id": template_id, "builtin": True})
 
     custom = load_custom_templates()
     templates = custom.setdefault("templates", {})
     templates[template_id] = {
         "name": str(body.get("name", template_id)),
-        "category": str(body.get("category", "cv")),
+        "category": "cv",
         "description": str(body.get("description", "")),
-        "layout": body.get("layout", {}),
-        "source": str(body.get("source", "")),
+        "layout": normalize_layout(body.get("layout")),
     }
     save_custom_templates(custom)
     return _json_response(200, {"ok": True, "id": template_id, "builtin": False})
@@ -639,6 +694,7 @@ STEP_LABELS = {
     "stage_3": "Stage 3 — cover letter",
     "build": "Static build — CV & cover letter PDFs",
     "complete": "Complete",
+    "complete_with_issues": "Complete with issues",
     "failed": "Failed",
 }
 
@@ -682,12 +738,23 @@ def start_generate(body: dict[str, Any] | None = None) -> tuple[int, dict[str, A
                 slugs=slugs,
                 build_targets=build_targets,
             )
+            preferred_stage = only_stage if only_stage in {"stage_1", "stage_2", "stage_3"} else None
+            if preferred_stage is None and from_stage != "build":
+                preferred_stage = "stage_3" if "letter" in build_targets else "stage_2"
+            outcome_summary = _generation_outcome_summary(slugs, preferred_stage)
+            completed_with_issues = bool(
+                outcome_summary.get("accepted")
+                or outcome_summary.get("reused")
+                or outcome_summary.get("skipped")
+                or outcome_summary.get("failed")
+            )
             save_generate_status(
                 {
                     "running": False,
-                    "step": "complete",
+                    "step": "complete_with_issues" if completed_with_issues else "complete",
                     "error": None,
                     "finished_at": _now_iso(),
+                    "outcome_summary": outcome_summary,
                 }
             )
         except Exception as exc:
@@ -748,13 +815,17 @@ def _app_key_for_slug(slug: str) -> str | None:
 
 
 def _pipeline_phases(slug: str) -> dict[str, bool]:
+    if str(DYNAMIC_ENGINE) not in sys.path:
+        sys.path.insert(0, str(DYNAMIC_ENGINE))
+    from batch_resilience import is_buildable  # noqa: E402
+
     stage1 = _read_stage_file("stage_1")
     stage2 = _read_stage_file("stage_2")
     stage3 = _read_stage_file("stage_3")
     app_key = _app_key_for_slug(slug)
-    has_stage1 = bool(app_key and isinstance(stage1.get(app_key), dict))
-    has_stage2 = bool(app_key and isinstance(stage2.get(app_key), dict))
-    has_stage3 = bool(app_key and isinstance(stage3.get(app_key), dict))
+    has_stage1 = bool(app_key and is_buildable(stage1.get(app_key)))
+    has_stage2 = bool(app_key and is_buildable(stage2.get(app_key)))
+    has_stage3 = bool(app_key and is_buildable(stage3.get(app_key)))
     has_build = resolve_output_for_slug(slug) is not None
     return {
         "stage_1": has_stage1,
@@ -762,6 +833,47 @@ def _pipeline_phases(slug: str) -> dict[str, bool]:
         "stage_3": has_stage3,
         "build": has_build,
     }
+
+
+def _pipeline_outcomes(slug: str) -> dict[str, dict[str, Any]]:
+    app_key = _app_key_for_slug(slug)
+    if not app_key:
+        return {}
+    outcomes: dict[str, dict[str, Any]] = {}
+    for stage_name in ("stage_1", "stage_2", "stage_3"):
+        entry = _read_stage_file(stage_name).get(app_key)
+        if not isinstance(entry, dict):
+            continue
+        meta = entry.get("_generation")
+        if isinstance(meta, dict) and meta:
+            outcomes[stage_name] = meta
+    return outcomes
+
+
+def _generation_outcome_summary(
+    slugs: list[str] | None = None,
+    preferred_stage: str | None = None,
+) -> dict[str, int]:
+    apps = load_applications()
+    selected = slugs if slugs else list(apps.keys())
+    summary = {"total": len(selected), "generated": 0, "accepted": 0, "reused": 0, "skipped": 0, "failed": 0}
+    for slug in selected:
+        outcomes = _pipeline_outcomes(slug)
+        outcome = outcomes.get(preferred_stage) if preferred_stage else None
+        if not outcome:
+            outcome = outcomes.get("stage_3") or outcomes.get("stage_2") or outcomes.get("stage_1")
+        status = str((outcome or {}).get("status", "generated"))
+        if status == "generated":
+            summary["generated"] += 1
+        elif status in {"accepted_low_quality", "accepted_after_retries"}:
+            summary["accepted"] += 1
+        elif status == "reused_previous":
+            summary["reused"] += 1
+        elif status in {"skipped_low_fit", "skipped_dependency"}:
+            summary["skipped"] += 1
+        else:
+            summary["failed"] += 1
+    return summary
 
 
 def _parse_build_targets_from_body(body: dict[str, Any]) -> frozenset[str]:

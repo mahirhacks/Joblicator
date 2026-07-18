@@ -22,6 +22,7 @@ const STEP_LABELS = {
   stage_3: "Stage 3 — cover letter",
   build: "Static build — CV & cover letter PDFs",
   complete: "Complete",
+  complete_with_issues: "Complete with issues",
   failed: "Failed",
 };
 
@@ -159,12 +160,43 @@ function PhaseChips({ phases }) {
   );
 }
 
+function GenerationOutcome({ outcomes }) {
+  const outcome = outcomes?.stage_3 || outcomes?.stage_2 || outcomes?.stage_1;
+  if (!outcome || outcome.status === "generated") return null;
+
+  const labels = {
+    accepted_low_quality: "Accepted usable draft",
+    accepted_after_retries: "Accepted after retries",
+    reused_previous: "Reused previous successful draft",
+    skipped_low_fit: "Skipped - profile fit too low",
+    skipped_dependency: "Skipped - upstream stage unavailable",
+    failed: "Generation failed for this job",
+  };
+  const warning = ["accepted_low_quality", "accepted_after_retries", "reused_previous"].includes(outcome.status);
+  const score = outcome.quality_score != null ? `Quality ${outcome.quality_score}/10` : null;
+  const fit = outcome.fit_score != null ? `Fit ${outcome.fit_score}/10` : null;
+  const detail = [score, fit, outcome.attempts ? `${outcome.attempts} attempt${outcome.attempts === 1 ? "" : "s"}` : null]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className={`application-generation-outcome ${warning ? "warning" : "failed"}`}>
+      <strong>{labels[outcome.status] || outcome.status}</strong>
+      {detail && <span>{detail}</span>}
+      {outcome.reason && <span>{outcome.reason}</span>}
+    </div>
+  );
+}
+
 function ApplicationCard({
   app,
   selectMode,
   selected,
   onToggleSelect,
   onUpdateStatus,
+  templates,
+  defaultTemplateId,
+  onUpdateTemplate,
 }) {
   function handleCardClick() {
     if (selectMode) onToggleSelect(app.slug);
@@ -237,6 +269,21 @@ function ApplicationCard({
 
         <div className="application-card-body">
           <PhaseChips phases={app.phases} />
+          <GenerationOutcome outcomes={app.generation_outcomes} />
+          {!selectMode && (
+            <label className="application-template-picker" onClick={(e) => e.stopPropagation()}>
+              <span>CV template</span>
+              <select
+                value={app.cv_template_id || defaultTemplateId}
+                onChange={(e) => onUpdateTemplate(app.slug, e.target.value)}
+                aria-label={`CV template for ${app.title || app.slug}`}
+              >
+                {Object.entries(templates).map(([id, template]) => (
+                  <option key={id} value={id}>{template.name || id}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {!app.phases?.build && (
             <p className="application-hint">Generate to create CV and cover letter for this role.</p>
           )}
@@ -269,12 +316,16 @@ export default function ApplicationsPage() {
   const [selected, setSelected] = useState(() => new Set());
   const [generateMode, setGenerateMode] = useState("full");
   const [buildOutput, setBuildOutput] = useState("both");
+  const [templates, setTemplates] = useState({});
+  const [defaultTemplateId, setDefaultTemplateId] = useState("cv_professional");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.listApplications();
+      const [data, templateData] = await Promise.all([api.listApplications(), api.listTemplates()]);
       setApps(data.applications || []);
+      setTemplates({ ...(templateData.catalog || {}), ...(templateData.custom || {}) });
+      setDefaultTemplateId(templateData.defaults?.cv || "cv_professional");
     } catch (e) {
       showToast(e.message, "error");
     } finally {
@@ -291,8 +342,12 @@ export default function ApplicationsPage() {
       } else {
         setGenerating(false);
         if (status.error) showToast(status.error, "error");
-        else if (status.step === "complete") {
-          showToast("Generation complete");
+        else if (status.step === "complete" || status.step === "complete_with_issues") {
+          const summary = status.outcome_summary;
+          const issueCount = summary
+            ? (summary.accepted || 0) + (summary.reused || 0) + (summary.skipped || 0) + (summary.failed || 0)
+            : 0;
+          showToast(issueCount ? `Batch complete - ${issueCount} job${issueCount === 1 ? "" : "s"} need attention` : "Generation complete");
           load();
         }
       }
@@ -380,6 +435,16 @@ export default function ApplicationsPage() {
     try {
       await api.updateJob(slug, { status });
       setApps((list) => list.map((a) => (a.slug === slug ? { ...a, status } : a)));
+    } catch (e) {
+      showToast(e.message, "error");
+    }
+  }
+
+  async function updateTemplate(slug, cvTemplateId) {
+    try {
+      await api.updateJob(slug, { cv_template_id: cvTemplateId });
+      setApps((list) => list.map((a) => (a.slug === slug ? { ...a, cv_template_id: cvTemplateId } : a)));
+      showToast("CV template selected");
     } catch (e) {
       showToast(e.message, "error");
     }
@@ -582,6 +647,9 @@ export default function ApplicationsPage() {
                     selected={selected.has(app.slug)}
                     onToggleSelect={toggleSelect}
                     onUpdateStatus={updateStatus}
+                    templates={templates}
+                    defaultTemplateId={defaultTemplateId}
+                    onUpdateTemplate={updateTemplate}
                   />
                 ))}
               </div>

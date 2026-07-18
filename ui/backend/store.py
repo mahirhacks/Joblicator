@@ -45,7 +45,7 @@ def meta_path() -> Path:
 def profile_path() -> Path:
     from utils import load_config, resolve_path
 
-    config = load_config(ROOT / "engine" / "dynamic_engine" / "config.yaml")
+    config = load_config(ROOT / "config.yaml")
     return resolve_path(config, "profile", "json", "settings/local_profile.json")
 
 
@@ -60,7 +60,7 @@ def custom_templates_path() -> Path:
 def stage_path(name: str) -> Path:
     from utils import load_config, resolve_output_path
 
-    config = load_config(ROOT / "engine" / "dynamic_engine" / "config.yaml")
+    config = load_config(ROOT / "config.yaml")
     defaults = {
         "stage_1": "engine/dynamic_engine/data/stage_1.json",
         "stage_2": "engine/dynamic_engine/data/stage_2.json",
@@ -84,7 +84,7 @@ def outputs_dir() -> Path:
 
 
 def engine_config_path() -> Path:
-    return DYNAMIC_ENGINE / "config.yaml"
+    return ROOT / "config.yaml"
 
 
 def load_template_settings() -> dict[str, Any]:
@@ -115,17 +115,26 @@ def get_application_meta(slug: str) -> dict[str, Any]:
     return {
         "status": str(entry.get("status", "unsubmitted")),
         "notes": str(entry.get("notes", "")),
+        "cv_template_id": str(entry.get("cv_template_id", "")),
         "updated_at": entry.get("updated_at", ""),
     }
 
 
-def set_application_meta(slug: str, *, status: str | None = None, notes: str | None = None) -> dict[str, Any]:
+def set_application_meta(
+    slug: str,
+    *,
+    status: str | None = None,
+    notes: str | None = None,
+    cv_template_id: str | None = None,
+) -> dict[str, Any]:
     meta = load_meta()
     entry = meta.get(slug, {}) if isinstance(meta.get(slug), dict) else {}
     if status is not None:
         entry["status"] = status
     if notes is not None:
         entry["notes"] = notes
+    if cv_template_id is not None:
+        entry["cv_template_id"] = cv_template_id
     entry["updated_at"] = datetime.now(UTC).isoformat()
     meta[slug] = entry
     save_meta(meta)

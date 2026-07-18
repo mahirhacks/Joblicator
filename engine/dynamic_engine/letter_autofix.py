@@ -48,6 +48,118 @@ _BANNED_PHRASE_REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bI am eager to\b", re.IGNORECASE), "I am prepared to"),
     (re.compile(r"\bI am excited to\b", re.IGNORECASE), "I would be glad to"),
     (re.compile(r"\bI am passionate about\b", re.IGNORECASE), "I care deeply about"),
+    (re.compile(r"\bperfectly aligns?\b", re.IGNORECASE), "aligns"),
+    (re.compile(r"\bfrom day one\b", re.IGNORECASE), ""),
+    (re.compile(r"\bby by\b", re.IGNORECASE), "by"),
+    (
+        re.compile(r"\s*In the a related technical project project,[^.]*\.", re.IGNORECASE),
+        "",
+    ),
+    (re.compile(r"\bIn the a related technical project project\b", re.IGNORECASE), "In a related technical project"),
+    (re.compile(r"\bdeep expertise\b", re.IGNORECASE), "hands-on experience"),
+    (re.compile(r"\bexpertise\b", re.IGNORECASE), "experience"),
+    (re.compile(r"\btechnical depth\b", re.IGNORECASE), "technical grounding"),
+    (re.compile(r"\brobust technical foundation\b", re.IGNORECASE), "technical foundation"),
+    (re.compile(r"\brobust security engineering\b", re.IGNORECASE), "security engineering"),
+    (
+        re.compile(r"\bextensive (?=(?:experience|work|background|expertise|testing|assessments?|reviews?)\b)", re.IGNORECASE),
+        "hands-on ",
+    ),
+    (re.compile(r"\bextensive\b", re.IGNORECASE), "broad"),
+    (re.compile(r"\bhands-on suite\b", re.IGNORECASE), "suite"),
+    (
+        re.compile(
+            r"\bcomprehensive (?=(?:[\w&/-]+ ){0,3}(?:testing|assessments?|reviews?|experience|knowledge)\b)",
+            re.IGNORECASE,
+        ),
+        "hands-on ",
+    ),
+    (
+        re.compile(r"\badvanced (?=(?:machine learning|analytics|security|capabilities|expertise)\b)", re.IGNORECASE),
+        "technical ",
+    ),
+    (re.compile(r"\bscalable solutions\b", re.IGNORECASE), "solutions"),
+    (re.compile(r"\bexperience extends deeply\b", re.IGNORECASE), "experience also extends"),
+    (re.compile(r"\bspecialized knowledge\b", re.IGNORECASE), "project experience"),
+    (
+        re.compile(r"\b(?:provide|provides|provided|delivered|delivers) high value\b", re.IGNORECASE),
+        "support practical needs",
+    ),
+    (re.compile(r"\bhigh-stakes\s+", re.IGNORECASE), ""),
+    (
+        re.compile(r"\bsecur(?:ed|ing) (?:the )?(?:cloud |network )?infrastructure\b", re.IGNORECASE),
+        "reviewing infrastructure security",
+    ),
+    (
+        re.compile(r"\bto secure (?:complex )?(?:digital )?infrastructures?\b", re.IGNORECASE),
+        "to review application and infrastructure security",
+    ),
+    (
+        re.compile(r"\bsecur(?:ed|ing) (?:critical |complex )?(web applications|APIs)\b", re.IGNORECASE),
+        r"testing \1",
+    ),
+    (re.compile(r"\bsignificantly reduce\b", re.IGNORECASE), "reduce"),
+    (re.compile(r"\bevery vulnerability\b", re.IGNORECASE), "each validated vulnerability"),
+    (
+        re.compile(r"\bensuring every security gap is addressed\b", re.IGNORECASE),
+        "supporting remediation of validated security gaps",
+    ),
+    (
+        re.compile(
+            r"\bensuring each infrastructure component and application feature is hardened against potential threats\b",
+            re.IGNORECASE,
+        ),
+        "supporting careful review and hardening of infrastructure components and application features",
+    ),
+    (
+        re.compile(
+            r"\bensuring that (?:your|the) (?:digital )?infrastructure remains secure\b",
+            re.IGNORECASE,
+        ),
+        "supporting careful security review as the infrastructure evolves",
+    ),
+    (
+        re.compile(r"\bto ensure secure connectivity\b", re.IGNORECASE),
+        "within the deployed network design",
+    ),
+    (
+        re.compile(
+            r"\bensuring that each validated vulnerability is identified and communicated clearly\b",
+            re.IGNORECASE,
+        ),
+        "with a focus on clearly communicating validated vulnerabilities",
+    ),
+    (
+        re.compile(
+            r"\bensuring that each validated vulnerability is not just identified, but translated into clear remediation steps\b",
+            re.IGNORECASE,
+        ),
+        "by translating validated vulnerabilities into clear remediation steps",
+    ),
+    (re.compile(r"\bpractical expertise\b", re.IGNORECASE), "project experience"),
+    (
+        re.compile(
+            r"\bensures that each validated vulnerability is addressed with a clear path toward\b",
+            re.IGNORECASE,
+        ),
+        "supports clear remediation paths toward",
+    ),
+    (
+        re.compile(r"\bwhile ensuring stability through the configuration of\b", re.IGNORECASE),
+        "and configured",
+    ),
+    (
+        re.compile(r"\bto improv(?:e|ed|ing) (?:accuracy|performance|efficiency)\b", re.IGNORECASE),
+        "within the training pipeline",
+    ),
+    (
+        re.compile(r"\bto ensur(?:e|ed|ing) accurate risk assessment\b", re.IGNORECASE),
+        "within the risk-estimation pipeline",
+    ),
+    (
+        re.compile(r"\benhanc(?:e|ed|ing) (?:the )?(?:user|customer) experience\b", re.IGNORECASE),
+        "support the product workflow",
+    ),
 )
 
 
@@ -742,24 +854,8 @@ def autofix_letter_prose(
     if _rewrite_closing_if_thank_you(content):
         changed = True
 
-    if fill_thin_paragraphs(
-        content,
-        body_count,
-        gaps_addressed=gaps_addressed,
-        skip_body_indices=skip_body_indices,
-    ):
-        changed = True
-
     if _enforce_paragraph_limits(
         content, body_count, max_words, skip_body_indices=skip_body_indices
-    ):
-        changed = True
-
-    if fix_thin_or_generic_bodies(
-        content,
-        body_count,
-        skip_body_indices=skip_body_indices,
-        max_words=max_words,
     ):
         changed = True
 
@@ -796,12 +892,4 @@ def autofix_until_clean(
         if not scan_letter_style(content):
             break
 
-    if finalize_letter_repairs(
-        content,
-        body_count,
-        max_words=max_words,
-        gaps_addressed=gaps_addressed,
-        skip_body_indices=skip_body_indices,
-    ):
-        any_change = True
     return any_change

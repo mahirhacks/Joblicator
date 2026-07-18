@@ -1,16 +1,23 @@
 ollama:
   base_url: http://127.0.0.1:11434
-  model: gemma4:26b
+  model: huihui_ai/gemma-4-abliterated:26b
   think: false
   auto_start: true
 generation:
   temperature: 0.5             # default for uncategorized calls
   creative_temperature: 0.65   # prose drafting (summary, bullets, letter body)
   precise_temperature: 0.2     # reviews, scoring, claims, structured formatting
-  context_window: 16384        # stage-3 prompts overflow 8192 and truncate silently
+  context_window: 8192         # compact stage prompts are designed to fit this window
   top_p: 0.9
   repeat_penalty: 1.1
   seed: 0                      # >0 = reproducible sampling
+batch_resilience:
+  enabled: true
+  continue_on_error: true      # one broken job never stops the remaining batch
+  max_attempts_per_application: 3
+  skip_fit_below: 5            # after retries, record a no-document outcome below this fit
+  accept_low_quality_fit_at_most: 6  # valid 5-6/10-fit drafts may pass after review retries
+  reuse_previous_success: true # preserve the last buildable draft during transient model failures
 applications:
   json: applications/local_applications.json
 profile:
@@ -46,14 +53,12 @@ stage_2:
   parser_autofix:
     enabled: true
 stage_3:
-  body_paragraphs: 3
+  body_paragraphs: 2
   body_paragraph:
-    max_words: 100
+    max_words: 110
   honesty:
     use_stage_2_claims: true
-    deterministic_gap_paragraph: true
-    gap_paragraph_index: 3
-    smooth_gap_paragraph: true
+    # Gaps stay in metadata and claims checks; cover letters never volunteer weaknesses.
     max_gaps_in_letter: 3
   style_verification:
     enabled: true
@@ -64,5 +69,6 @@ stage_3:
   parser_verification:
     enabled: true
     max_passes: 2
+    fail_on_unresolved: true
   parser_autofix:
     enabled: true

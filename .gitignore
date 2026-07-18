@@ -1,28 +1,31 @@
-# --- Local user data (never commit) ---
-applications/local_applications.json
+# Local user/application data
 applications/local_*.json
-
-settings/local_profile.json
-settings/local_scanner.json
-settings/local_template.json
+applications/application_meta.json
 settings/local_*.json
+settings/custom_templates.json
+*.local.json
 
-# Secrets / env
+# Secrets and environment overrides
 .env
 .env.*
 !.env.example
+!.env.*.example
+.secrets/
+credentials*.json
+secrets*.json
 *.pem
-credentials.json
-secrets.json
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
 
-# --- Pipeline generated artifacts ---
+# Generated pipeline data and documents
 engine/dynamic_engine/data/
-engine/dynamic_engine/data/**
-
 outputs/
-outputs/**
+*.log
 
-# --- Python ---
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -34,35 +37,61 @@ env/
 ENV/
 *.egg-info/
 .eggs/
+pip-wheel-metadata/
 dist/
 build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
+.hypothesis/
 htmlcov/
 .coverage
 .coverage.*
-*.log
+coverage.xml
+junit.xml
+*.prof
+*.pstats
 
-# --- Node / frontend ---
-ui/frontend/node_modules/
+# Node and frontend tooling
+node_modules/
 ui/frontend/dist/
+ui/frontend/.vite/
+.npm/
+.pnpm-store/
+*.tsbuildinfo
+.eslintcache
 
-# Vite build output copied into ui/frontend/ for the Python server (npm run build)
+# Vite output published beside the Python server
 ui/frontend/assets/
 ui/frontend/index.html
 
-ui/frontend/.vite/
+# Local databases and caches
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
 
-# --- OS / editor ---
-.DS_Store
-Thumbs.db
-desktop.ini
+# Editors and local agent state
+.vscode/
+.idea/
 .cursor/
-.cursor/**
+.codex/
+*.code-workspace
 
-# --- Debug / scratch ---
+# OS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary and scratch files
 *.tmp
+*.temp
 *.bak
 *.swp
+*.swo
 *~

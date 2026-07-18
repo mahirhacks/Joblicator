@@ -1,4 +1,4 @@
-/** Field definitions for engine/dynamic_engine/config.yaml */
+/** Field definitions for the project-root config.yaml */
 
 export const ENGINE_CONFIG_SECTIONS = [
   {
@@ -43,7 +43,7 @@ export const ENGINE_CONFIG_SECTIONS = [
         label: "Context window",
         type: "number",
         integer: true,
-        hint: "Stage-3 prompts overflow 8192 and truncate silently",
+        hint: "Compact prompts target 8192; increase only when the selected model supports it",
       },
       { path: ["generation", "top_p"], label: "Top P", type: "number", step: 0.05 },
       { path: ["generation", "repeat_penalty"], label: "Repeat penalty", type: "number", step: 0.05 },
@@ -53,6 +53,41 @@ export const ENGINE_CONFIG_SECTIONS = [
         type: "number",
         integer: true,
         hint: "Greater than 0 enables reproducible sampling",
+      },
+    ],
+  },
+  {
+    id: "batch_resilience",
+    title: "Batch resilience",
+    description: "Keep unattended runs moving when one application or model response fails.",
+    fields: [
+      { path: ["batch_resilience", "enabled"], label: "Resilient batches", type: "boolean" },
+      { path: ["batch_resilience", "continue_on_error"], label: "Continue after job failure", type: "boolean" },
+      {
+        path: ["batch_resilience", "max_attempts_per_application"],
+        label: "Attempts per application",
+        type: "number",
+        integer: true,
+        hint: "Retries CV and cover-letter stages independently",
+      },
+      {
+        path: ["batch_resilience", "skip_fit_below"],
+        label: "Skip below fit score",
+        type: "number",
+        integer: true,
+        hint: "After retries, 1-10 profile fit threshold",
+      },
+      {
+        path: ["batch_resilience", "accept_low_quality_fit_at_most"],
+        label: "Accept lower quality up to fit",
+        type: "number",
+        integer: true,
+        hint: "Valid borderline-fit drafts can pass instead of blocking the batch",
+      },
+      {
+        path: ["batch_resilience", "reuse_previous_success"],
+        label: "Reuse previous successful draft",
+        type: "boolean",
       },
     ],
   },

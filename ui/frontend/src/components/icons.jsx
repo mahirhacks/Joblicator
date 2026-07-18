@@ -59,11 +59,21 @@ export function IconSettings() {
   );
 }
 
+export function IconSearch() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="5.25" stroke="currentColor" strokeWidth="1.5" />
+      <path d="m13 13 3.75 3.75" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IconLogo() {
   return (
     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="3" y="3" width="18" height="18" fill="#171717" />
-      <path d="M8 15V9l4 3 4-3v6" stroke="#fff" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="2.5" y="6.5" width="14" height="14" rx="3" fill="currentColor" opacity=".2" />
+      <rect x="5" y="4" width="14" height="14" rx="3" fill="currentColor" opacity=".45" />
+      <rect x="7.5" y="1.5" width="14" height="14" rx="3" fill="currentColor" />
     </svg>
   );
 }

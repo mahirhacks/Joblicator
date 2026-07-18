@@ -12,6 +12,13 @@ _GROUNDING_RULES = """
 - Every employer, project, certification, date, tool, and outcome must appear in candidate_cv.
 - If a fact is not in candidate_cv, do not write it — even if the job wants it.
 - When available_keywords is provided: use a keyword only if (a) candidate_cv supports it and (b) it fits naturally.
+- Preserve the candidate's scope exactly. A project that uses ML, an LLM, or RAG is NOT AI security testing,
+  adversarial testing, red teaming, or model evaluation unless candidate_cv explicitly says so.
+- Copy historical job titles and employer names exactly. Never replace them with the target job title.
+- Do not add outcomes such as improved accuracy, enhanced detection, scalability, reliability, or business impact
+  unless that outcome is explicitly stated in the same candidate_cv entry.
+- Avoid seniority inflation such as "expertise", "specialized experience", "deep experience", or "proven track record";
+  describe the exact evidence instead.
 - Never paste raw job-description fragments as broken English (e.g. "value of secure SDLC")."""
 
 _BASE = """You are an expert resume writer producing ATS-friendly, honest, tailored resume content for ONE job application.
@@ -103,7 +110,7 @@ LOOP_2_WORK_EXPERIENCE_SYSTEM = _BASE + _VOICE_RULE + _BULLET_RULES + """
 Write tailored resume content for ONE work experience entry (experience_entry in user message).
 
 ## Field rules
-- TITLE and COMPANY: copy from candidate_cv (polish wording only, do not change employer).
+- TITLE and COMPANY: copy character-for-character from experience_entry; never substitute the target role.
 - START_DATE / END_DATE: YYYY-MM format from CV. Use "Present" only if CV says current role.
 - BULLETS: 3-5 bullets unless CV has fewer distinct duties. Action-verb first, no pronouns.
 
@@ -120,6 +127,9 @@ LOOP_2_PROJECTS_SYSTEM = _BASE + _PROJECT_RULES + """
 
 ## Task
 Write tailored content for ONE project (project_entry in user message).
+
+Treat project_entry as a closed factual boundary. Preserve what the project actually does; job-posting
+keywords may change emphasis but may never change its purpose, evaluation type, or claimed outcomes.
 
 ## Output format
 TITLE: <project name from CV>

@@ -23,6 +23,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from engine.template_contract import resolve_cv_template, visible_generation_keys
+
+from batch_resilience import (
+    estimate_profile_fit,
+    failure_record,
+    is_buildable,
+    payload_status,
+    process_with_resilience,
+)
 from grounding import (
     build_claims_ledger,
     build_gap_disclosures,
@@ -105,6 +118,7 @@ from verification import (
 from skills_validator import enforce_skill_keys_only, validate_skills_output
 from style_validator import scan_cv_style
 from cv_autofix import autofix_cv_until_clean
+from cv_quality import apply_safe_cv_fixes, assess_cv_quality
 
 STAGE_1_DEFAULT = "engine/dynamic_engine/data/stage_1.json"
 STAGE_2_DEFAULT = "engine/dynamic_engine/data/stage_2.json"
@@ -154,7 +168,7 @@ VERIFIED_SECTIONS = (
     "volunteer_experience",
     "interests",
 )
-META_CONTENT_KEYS = frozenset({"quality_review", "parser_review"})
+META_CONTENT_KEYS = frozenset({"quality_review", "parser_review", "_template"})
 
 
 class KeywordPool:
@@ -200,10 +214,21 @@ def _keyword_settings(config: dict) -> dict[str, int]:
 
 
 def _iter_section_keyword_groups(
-    section_keywords: list[str],
+    section_keywords: list[Any],
     synonyms_per_original: int,
 ) -> list[tuple[str, list[str]]]:
-    """Parse stage_1 interleaved lists: original, then up to N synonym variants."""
+    """Read structured groups, with flat interleaved lists retained for old stage-1 files."""
+    if section_keywords and all(isinstance(item, dict) for item in section_keywords):
+        groups: list[tuple[str, list[str]]] = []
+        for item in section_keywords:
+            original = str(item.get("original", "")).strip()
+            variants = item.get("variants", [])
+            if not original:
+                continue
+            synonyms = [str(value).strip() for value in variants if str(value).strip()]
+            groups.append((original, synonyms[:synonyms_per_original]))
+        return groups
+
     groups: list[tuple[str, list[str]]] = []
     index = 0
     while index < len(section_keywords):
@@ -235,6 +260,7 @@ def _append_unique_to_master(master: list[str], seen: set[str], keyword: str) ->
 def build_master_keywords(
     resume_keywords: dict[str, Any],
     config: dict | None = None,
+    grounding_source: Any | None = None,
 ) -> list[str]:
     settings = _keyword_settings(config or {})
     max_original = settings["max_original_keyword"]
@@ -243,14 +269,32 @@ def build_master_keywords(
     seen_originals: set[str] = set()
     seen_terms: set[str] = set()
     master: list[str] = []
+    grounding_text = content_to_text(grounding_source) if grounding_source is not None else ""
     if not isinstance(resume_keywords, dict):
         return master
 
     for values in resume_keywords.values():
         if not isinstance(values, list):
             continue
-        cleaned = drop_placeholder_keywords([str(item) for item in values])
+        if values and all(isinstance(item, dict) for item in values):
+            cleaned: list[Any] = values
+        else:
+            cleaned = drop_placeholder_keywords([str(item) for item in values])
         for original, synonyms in _iter_section_keyword_groups(cleaned, max_synonym):
+            if grounding_text:
+                supported_terms = [
+                    term
+                    for term in [original, *synonyms]
+                    if trace_keywords_in_text(grounding_text, [term])
+                ]
+                if not supported_terms:
+                    continue
+                # Legacy stage-1 data stored flat triples, so a supported third item could
+                # accidentally authorize an unrelated first item (e.g. Python authorizing
+                # "Active Directory security"). Promote only a term that is itself grounded.
+                if original not in supported_terms:
+                    original = supported_terms[0]
+                synonyms = [term for term in supported_terms if term != original]
             orig_key = _normalize_term_key(original)
             if not orig_key or orig_key in seen_originals:
                 continue
@@ -821,6 +865,7 @@ def finalize_application_content(
     cert_settings: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Deterministic fixes for fields parser checks — applied before parser gate."""
+    apply_safe_cv_fixes(content, profile)
     cert_cfg = cert_settings or {"description_min_chars": 24}
     certs = content.get("certifications")
     if isinstance(certs, dict):
@@ -1485,7 +1530,8 @@ def _resume_sections_for_review(content: dict[str, Any], profile: dict) -> dict[
     for key in VERIFIED_SECTIONS:
         if key == "volunteer_experience" and not _has_volunteer_profile(profile):
             continue
-        sections[key] = content.get(key)
+        if key in content:
+            sections[key] = content.get(key)
     return sections
 
 
@@ -1705,7 +1751,10 @@ def verify_and_refine_application(
     min_quality = int(settings.get("min_quality", 7))
     max_passes = int(settings.get("max_passes", 3))
     skills_settings = _skills_settings(config)
-    master_keywords = build_master_keywords(stage1_entry.get("resume_keywords", {}), config)
+    keyword_source = stage1_entry.get("resume_keyword_groups") or stage1_entry.get(
+        "resume_keywords", {}
+    )
+    master_keywords = build_master_keywords(keyword_source, config, grounding_source=profile)
     locked_sections: dict[str, dict[str, Any]] = {}
     feedback_history: dict[str, list[str]] = {}
 
@@ -1739,7 +1788,8 @@ def verify_and_refine_application(
                 feedback_history.get(section, []),
                 extra_rules=(
                     "Keep only facts from candidate_cv. "
-                    "Do not invent employers, tools, or outcomes."
+                    "Do not invent employers, tools, outcomes, or seniority. Copy historical titles exactly. "
+                    "Never reinterpret ML, LLM, or RAG work as security testing unless candidate_cv says so."
                 ),
             )
             content[section] = run_content_section(
@@ -2004,15 +2054,22 @@ def parse_content_issues(
     ]
 
     for section_name, scanner in scanners:
+        if section_name != "fit_review" and section_name not in content:
+            continue
         if not _profile_expects_section(profile, section_name):
             continue
         issues = scanner()
         if issues:
             issues_by_section[section_name] = issues
 
+    for section, source_issues in assess_cv_quality(content, profile).items():
+        if section not in content:
+            continue
+        issues_by_section.setdefault(section, []).extend(source_issues)
+
     claims = content.get("claims_to_avoid", [])
     ledger = content.get("claims_ledger", {})
-    if isinstance(claims, list) and claims:
+    if isinstance(claims, list):
         for section, grounding_issues in scan_content_grounding(
             content, profile, claims, ledger if isinstance(ledger, dict) else {}
         ).items():
@@ -2076,7 +2133,11 @@ def _parser_improvement_block(section: str, prior_draft: Any, issues: list[str])
         section,
         prior_draft,
         issues,
-        extra_rules="All required fields must be non-empty. Use only facts from candidate_cv.",
+        extra_rules=(
+            "All required fields must be non-empty. Use only facts from candidate_cv. "
+            "Copy historical titles, employers, and project purposes exactly. Never recast an ML/LLM "
+            "project as adversarial or security testing, and never add outcomes absent from its source entry."
+        ),
     )
 
 
@@ -2134,7 +2195,10 @@ def parser_verify_and_regenerate(
 
     max_passes = int(settings.get("max_passes", 2))
     skills_settings = _skills_settings(config)
-    master_keywords = build_master_keywords(stage1_entry.get("resume_keywords", {}), config)
+    keyword_source = stage1_entry.get("resume_keyword_groups") or stage1_entry.get(
+        "resume_keywords", {}
+    )
+    master_keywords = build_master_keywords(keyword_source, config, grounding_source=profile)
     scan_content = _content_without_meta(content)
 
     cert_settings = _certifications_settings(config)
@@ -2199,7 +2263,11 @@ def parser_verify_and_regenerate(
                 content.get(section),
                 issues,
                 issue_history=prior_issues,
-                extra_rules="All required fields must be non-empty. Use only facts from candidate_cv.",
+                extra_rules=(
+                    "All required fields must be non-empty. Use only facts from candidate_cv. "
+                    "Copy historical titles, employers, and project purposes exactly. Never recast an ML/LLM "
+                    "project as adversarial or security testing, and never add outcomes absent from its source entry."
+                ),
             )
             content[section] = run_content_section(
                 section,
@@ -2269,15 +2337,24 @@ def _generate_application_content(
     stage1_entry: dict[str, Any],
     application: dict,
     profile: dict,
+    cv_template: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    master_keywords = build_master_keywords(stage1_entry.get("resume_keywords", {}), config)
+    keyword_source = stage1_entry.get("resume_keyword_groups") or stage1_entry.get(
+        "resume_keywords", {}
+    )
+    master_keywords = build_master_keywords(keyword_source, config, grounding_source=profile)
     keyword_pool = KeywordPool(master_keywords)
 
     fit_review = loop1_fit_review(config, app_key, stage1_entry, application, profile)
     claims_to_avoid, gaps_addressed, claims_ledger = build_application_claims(fit_review, profile)
     claims_guidance = claims_guidance_block(claims_to_avoid, gaps_addressed, claims_ledger)
 
-    executive_summary = loop2_executive_summary(
+    cv_template = cv_template or resolve_cv_template(PROJECT_ROOT)
+    enabled = visible_generation_keys(cv_template.get("layout"))
+    generated: dict[str, Any] = {}
+
+    if "executive_summary" in enabled:
+        generated["executive_summary"] = loop2_executive_summary(
         config,
         app_key,
         stage1_entry,
@@ -2286,9 +2363,10 @@ def _generate_application_content(
         fit_review,
         keyword_pool,
         claims_guidance=claims_guidance,
-    )
+        )
 
-    work_experience = loop2_work_experience(
+    if "work_experience" in enabled:
+        generated["work_experience"] = loop2_work_experience(
         config,
         app_key,
         stage1_entry,
@@ -2296,9 +2374,10 @@ def _generate_application_content(
         profile,
         keyword_pool,
         claims_guidance=claims_guidance,
-    )
+        )
 
-    projects = loop2_projects(
+    if "projects" in enabled:
+        generated["projects"] = loop2_projects(
         config,
         app_key,
         stage1_entry,
@@ -2306,9 +2385,10 @@ def _generate_application_content(
         profile,
         keyword_pool,
         claims_guidance=claims_guidance,
-    )
+        )
 
-    skills = loop2_skills(
+    if "skills" in enabled:
+        generated["skills"] = loop2_skills(
         config,
         app_key,
         stage1_entry,
@@ -2316,13 +2396,15 @@ def _generate_application_content(
         profile,
         keyword_pool,
         claims_guidance=claims_guidance,
-    )
+        )
 
-    achievements = loop2_achievements(
-        config, app_key, stage1_entry, application, profile, keyword_pool
-    )
+    if "achievements" in enabled:
+        generated["achievements"] = loop2_achievements(
+            config, app_key, stage1_entry, application, profile, keyword_pool
+        )
 
-    certifications = loop2_certifications(
+    if "certifications" in enabled:
+        generated["certifications"] = loop2_certifications(
         config,
         app_key,
         stage1_entry,
@@ -2330,13 +2412,12 @@ def _generate_application_content(
         profile,
         keyword_pool,
         claims_guidance=claims_guidance,
-    )
+        )
 
-    volunteer_experience = loop2_volunteer(
-        config, app_key, stage1_entry, application, profile, keyword_pool
-    )
-
-    interests = loop2_interests(config, app_key, stage1_entry, application, profile, keyword_pool)
+    if "volunteer_experience" in enabled:
+        generated["volunteer_experience"] = loop2_volunteer(
+            config, app_key, stage1_entry, application, profile, keyword_pool
+        )
 
     skills_settings = _skills_settings(config)
     cert_settings = _certifications_settings(config)
@@ -2348,14 +2429,14 @@ def _generate_application_content(
                 "claims_to_avoid": claims_to_avoid,
                 "gaps_addressed": gaps_addressed,
                 "claims_ledger": claims_ledger,
-                "executive_summary": executive_summary,
-                "work_experience": work_experience,
-                "projects": projects,
-                "skills": skills,
-                "achievements": achievements,
-                "certifications": certifications,
-                "volunteer_experience": volunteer_experience,
-                "interests": interests,
+                **generated,
+                "_template": {
+                    "id": cv_template["id"],
+                    "components": [
+                        section["id"] for section in cv_template["layout"]["sections"]
+                        if section.get("visible", True)
+                    ],
+                },
             }
         ),
         profile,
@@ -2370,8 +2451,9 @@ def process_application(
     stage1_entry: dict[str, Any],
     application: dict,
     profile: dict,
+    cv_template: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    content = _generate_application_content(config, app_key, stage1_entry, application, profile)
+    content = _generate_application_content(config, app_key, stage1_entry, application, profile, cv_template)
     content = verify_and_refine_application(config, app_key, stage1_entry, application, profile, content)
     return parser_verify_and_regenerate(config, app_key, stage1_entry, application, profile, content)
 
@@ -2438,17 +2520,59 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
             stage1_entry = _stage1_block(stage1, app_key)
         except ValueError as exc:
             print(f"Warning: {exc}", file=sys.stderr)
+            updates[app_key] = failure_record(
+                stage="stage_2",
+                app_key=app_key,
+                title=str(application.get("title", "")),
+                status="skipped_dependency",
+                attempts=0,
+                fit=None,
+                errors=[str(exc)],
+                dependency="stage_1",
+            )
+            partial_payload = _merge_payload(existing, header, static_header, updates)
+            partial_payload["pipeline_status"] = "RUNNING"
+            export_json(partial_payload, out_path)
+            continue
+
+        if not is_buildable(stage1_entry):
+            updates[app_key] = failure_record(
+                stage="stage_2",
+                app_key=app_key,
+                title=str(application.get("title", "")),
+                status="skipped_dependency",
+                attempts=0,
+                fit=None,
+                errors=[],
+                dependency="stage_1",
+            )
+            partial_payload = _merge_payload(existing, header, static_header, updates)
+            partial_payload["pipeline_status"] = "RUNNING"
+            export_json(partial_payload, out_path)
             continue
 
         if stage1_entry.get("source_slug") and stage1_entry["source_slug"] != slug:
             application = slug_to_application.get(stage1_entry["source_slug"], application)
 
-        updates[app_key] = process_application(
-            config, app_key, stage1_entry, application, profile
+        fallback_fit = estimate_profile_fit(stage1_entry, profile)
+        cv_template = resolve_cv_template(PROJECT_ROOT, slug=slug)
+        updates[app_key] = process_with_resilience(
+            config,
+            stage="stage_2",
+            app_key=app_key,
+            title=str(stage1_entry.get("title", application.get("title", ""))),
+            previous=existing.get(app_key) if isinstance(existing.get(app_key), dict) else None,
+            fallback_fit=fallback_fit,
+            generate=lambda app_key=app_key, stage1_entry=stage1_entry, application=application, cv_template=cv_template: process_application(
+                config, app_key, stage1_entry, application, profile, cv_template
+            ),
         )
+        partial_payload = _merge_payload(existing, header, static_header, updates)
+        partial_payload["pipeline_status"] = "RUNNING"
+        export_json(partial_payload, out_path)
 
     payload = _merge_payload(existing, header, static_header, updates)
-    payload["pipeline_status"] = "OK"
+    payload["pipeline_status"] = payload_status(updates)
     export_json(payload, out_path)
     clear_pipeline_failure_report(default_failure_report_path())
     return payload

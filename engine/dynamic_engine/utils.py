@@ -13,7 +13,7 @@ from typing import Any
 
 ENGINE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = ENGINE_DIR.parent.parent
-CONFIG_PATH = ENGINE_DIR / "config.yaml"
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
 def configure_stdio_utf8() -> None:

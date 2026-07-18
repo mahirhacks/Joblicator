@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from batch_resilience import payload_status, process_with_resilience
 from grounding import sanitize_profile
 from ollama import call_ollama
 from plain_text import (
@@ -235,20 +236,42 @@ def _merge_keyword_variants(
     return merged
 
 
+def _build_keyword_groups(
+    resume_keywords: dict[str, list[str]],
+    variants_by_section: dict[str, dict[str, list[str]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Preserve original-to-variant relationships instead of relying on flat-list offsets."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for section_key, base_keywords in resume_keywords.items():
+        section_variants = variants_by_section.get(section_key, {})
+        grouped[section_key] = [
+            {
+                "original": keyword,
+                "variants": _lookup_variants(keyword, section_variants),
+            }
+            for keyword in base_keywords
+            if str(keyword).strip()
+        ]
+    return grouped
+
+
 def loop3_keyword_variants(
     config: dict,
     app_key: str,
     application: dict,
     context: dict[str, Any],
     resume_keywords: dict[str, list[str]],
-) -> dict[str, list[str]]:
+    *,
+    include_groups: bool = False,
+) -> dict[str, list[str]] | tuple[dict[str, list[str]], dict[str, list[dict[str, Any]]]]:
     keywords_for_variants = {
         section_key: keywords
         for section_key, keywords in resume_keywords.items()
         if keywords
     }
     if not keywords_for_variants:
-        return resume_keywords
+        groups = _build_keyword_groups(resume_keywords, {})
+        return (resume_keywords, groups) if include_groups else resume_keywords
 
     prompt = {
         "task": (
@@ -293,9 +316,12 @@ def loop3_keyword_variants(
         variants_by_section = _parse_keyword_variants(raw, keywords_for_variants)
     except (json.JSONDecodeError, ValueError) as exc:
         print(f"  warning: could not parse keyword variants for {app_key}: {exc}", file=sys.stderr)
-        return resume_keywords
+        groups = _build_keyword_groups(resume_keywords, {})
+        return (resume_keywords, groups) if include_groups else resume_keywords
 
-    return _merge_keyword_variants(resume_keywords, variants_by_section)
+    merged = _merge_keyword_variants(resume_keywords, variants_by_section)
+    groups = _build_keyword_groups(resume_keywords, variants_by_section)
+    return (merged, groups) if include_groups else merged
 
 
 def build_section_caps(config: dict) -> dict[str, int]:
@@ -317,8 +343,13 @@ def process_application(
     resume_keywords = loop2_resume_keywords(
         config, app_key, application, context, section_caps
     )
-    resume_keywords = loop3_keyword_variants(
-        config, app_key, application, context, resume_keywords
+    resume_keywords, resume_keyword_groups = loop3_keyword_variants(
+        config,
+        app_key,
+        application,
+        context,
+        resume_keywords,
+        include_groups=True,
     )
 
     return {
@@ -326,6 +357,7 @@ def process_application(
         "title": application.get("title", ""),
         "context": context,
         "resume_keywords": resume_keywords,
+        "resume_keyword_groups": resume_keyword_groups,
     }
 
 
@@ -367,11 +399,22 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
 
     updates: dict[str, Any] = {}
     for index, app_key, slug, application in iter_applications(applications):
-        updates[app_key] = process_application(
-            config, app_key, slug, application, profile, section_caps
+        updates[app_key] = process_with_resilience(
+            config,
+            stage="stage_1",
+            app_key=app_key,
+            title=str(application.get("title", "")),
+            previous=existing.get(app_key) if isinstance(existing.get(app_key), dict) else None,
+            generate=lambda app_key=app_key, slug=slug, application=application: process_application(
+                config, app_key, slug, application, profile, section_caps
+            ),
         )
+        partial_payload = _merge_payload(existing, header, updates)
+        partial_payload["pipeline_status"] = "RUNNING"
+        export_json(partial_payload, out_path)
 
     payload = _merge_payload(existing, header, updates)
+    payload["pipeline_status"] = payload_status(updates)
     export_json(payload, out_path)
     return payload
 

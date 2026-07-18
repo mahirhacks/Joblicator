@@ -320,6 +320,12 @@ def parse_quality_review(raw: str, expected_sections: list[str]) -> dict[str, di
         )
         match = section_pattern.search(text)
         block = match.group(1).strip() if match else ""
+        # Smaller models often omit the redundant [section] label when only one
+        # section is requested but still return valid QUALITY/FEEDBACK fields.
+        if not block and len(expected_sections) == 1 and re.search(
+            r"QUALITY\s*:?\s*\d+", text, re.IGNORECASE
+        ):
+            block = text
         if not block:
             continue
         quality_raw = ""

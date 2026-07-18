@@ -3,14 +3,14 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 export const THEME_KEY = "joblication.theme";
 
 export function readTheme() {
-  if (typeof window === "undefined") return "light";
+  if (typeof window === "undefined") return "dark";
   try {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "dark" || stored === "light") return stored;
   } catch {
     /* ignore */
   }
-  return "light";
+  return "dark";
 }
 
 export function applyTheme(theme) {

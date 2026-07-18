@@ -26,7 +26,7 @@ def load_template_settings() -> dict[str, Any]:
 
 
 def load_engine_config() -> dict[str, Any]:
-    return load_config(DYNAMIC_DIR / "config.yaml")
+    return load_config(PROJECT_ROOT / "config.yaml")
 
 
 def load_stage_1(config: dict[str, Any] | None = None) -> dict[str, Any]:

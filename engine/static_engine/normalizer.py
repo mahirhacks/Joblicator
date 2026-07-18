@@ -291,6 +291,9 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
                 "title": str(item.get("title", "")).strip(),
                 "organization": str(item.get("company", item.get("organization", ""))).strip(),
                 "dates": _format_date_range(str(item.get("start_date", "")), str(item.get("end_date", ""))),
+                "points": [str(point).strip() for point in points if str(point).strip()]
+                if isinstance(points, list)
+                else [],
                 "description": description,
             }
         )
@@ -302,25 +305,17 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
         issuer_field = str(item.get("issuer", "")).strip()
         certifications.append(
             {
-                "title": _cert_title(name),
-                "issuer": _cert_issuer(name, description, issuer_field),
+                "title": name,
+                "issuer": issuer_field,
                 "description": description,
                 "date": _format_month(str(item.get("date", ""))),
             }
         )
 
     achievements: list[dict[str, Any]] = []
-    work_titles = [
-        str(job.get("title", "")).strip().lower()
-        for job in work_experience
-        if len(str(job.get("title", "")).split()) >= 2
-    ]
     for item in _sort_dict_items(application.get("achievements", {})):
         name = str(item.get("name", "")).strip()
         if not name:
-            continue
-        # A role already listed under Work Experience is not an "achievement" — skip the duplicate.
-        if any(title and title in name.lower() for title in work_titles):
             continue
         achievements.append(
             {

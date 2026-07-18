@@ -1,342 +1,98 @@
+{% set layout = template_layout|default({
+  'pagePadding': 60, 'pageBackground': '#ffffff', 'fontFamily': 'Arial, Helvetica, sans-serif',
+  'fontSize': 13.333, 'lineHeight': 1.42,
+  'sections': [
+    {'id':'contact','visible':true,'gapBefore':0}, {'id':'summary','visible':true,'gapBefore':15},
+    {'id':'skills','visible':true,'gapBefore':15}, {'id':'experience','visible':true,'gapBefore':15},
+    {'id':'projects','visible':true,'gapBefore':15}, {'id':'volunteer','visible':true,'gapBefore':15},
+    {'id':'education','visible':true,'gapBefore':15}, {'id':'certifications','visible':true,'gapBefore':15},
+    {'id':'achievements','visible':true,'gapBefore':15}, {'id':'additional','visible':true,'gapBefore':15}
+  ]
+}, true) %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>{{ contact.name }} — CV</title>
+  <title>{{ contact.name }} - CV</title>
   <style>
-    @page {
-      size: A4;
-      margin: 1.6cm 2.0cm;
-    }
+    @page { size: A4; margin: {{ layout.pagePadding }}px; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
     body {
-      font-family: Arial, Helvetica, sans-serif;
-      font-size: 10.3pt;
-      line-height: 1.35;
-      color: #1a1a1a;
-      margin: 0;
-      padding: 0;
+      color: #20252b;
+      background: {{ layout.pageBackground }};
+      font-family: {{ layout.fontFamily }};
+      font-size: {{ layout.fontSize }}px;
+      line-height: {{ layout.lineHeight }};
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
     }
-    table {
-      border-collapse: collapse;
-      width: 100%;
+    a { color: inherit; text-decoration: none; }
+    .cv-component { position: relative; break-inside: auto; }
+    .identity-header {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
+      gap: 28px; align-items: start; padding-bottom: 20px; border-bottom: 2px solid #20252b;
     }
-    td {
-      vertical-align: top;
-      padding: 0;
-    }
-    a {
-      color: #1f3a5f;
-      text-decoration: none;
-    }
-    .name {
-      font-size: 22pt;
-      font-weight: bold;
-      color: #17263b;
-      margin: 0 0 3px 0;
-      line-height: 1.15;
-    }
-    .headline {
-      font-size: 11pt;
-      font-weight: normal;
-      color: #4d5766;
-      text-transform: uppercase;
-      margin: 0;
-    }
-    .header-right {
-      font-size: 9.5pt;
-      line-height: 1.45;
-      text-align: right;
-      padding-top: 4px;
-      color: #333333;
-    }
-    .header-right p {
-      margin: 0 0 3px 0;
-    }
-    .contact-label {
-      color: #5a6472;
-      font-weight: bold;
-    }
-    .address-line {
-      color: #333333;
-    }
-    .summary {
-      margin: 18px 0 0 0;
-      text-align: justify;
-      color: #262626;
-    }
-    .section-title {
-      font-size: 10.5pt;
-      font-weight: bold;
-      color: #17263b;
-      text-transform: uppercase;
-      margin: 14px 0 6px 0;
-      border-bottom: 1px solid #d5dae2;
-      padding-bottom: 3px;
-      -pdf-keep-with-next: true;
-    }
-    .entry-row {
-      margin-top: 0;
-    }
-    .entry-row--spaced {
-      margin-top: 9px;
-    }
-    .split-left {
-      font-weight: bold;
-      font-size: 10.6pt;
-      color: #1a1a1a;
-      width: 72%;
-      padding-right: 8px;
-    }
-    .split-right {
-      font-weight: normal;
-      font-size: 9.5pt;
-      color: #5a6472;
-      width: 28%;
-      text-align: right;
-      white-space: nowrap;
-      padding-top: 1px;
-    }
-    .subtitle {
-      font-style: italic;
-      color: #444b56;
-      margin: 2px 0 5px 0;
-    }
-    .entry-body {
-      margin: 5px 0 0 0;
-      text-align: justify;
-    }
-    ul.bullets {
-      margin: 6px 0 0 0;
-      padding: 0 0 0 18px;
-      list-style-type: circle;
-    }
-    ul.bullets li {
-      margin: 0 0 4px 0;
-      padding-left: 2px;
-      text-align: justify;
-    }
-    ul.bullets li:last-child {
-      margin-bottom: 0;
-    }
-    .skills-line {
-      margin: 0 0 5px 0;
-      text-align: justify;
-    }
-    .skills-line:last-child {
-      margin-bottom: 0;
-    }
-    .skills-label {
-      font-weight: bold;
-      color: #17263b;
-    }
-    .education-school {
-      font-weight: bold;
-      font-size: 10.6pt;
-      color: #1a1a1a;
-    }
-    .education-degree {
-      margin: 6px 0 4px 0;
-      text-align: justify;
-    }
-    .education-detail {
-      margin: 3px 0;
-      text-align: justify;
-      color: #333333;
-    }
-    .cert-name {
-      font-weight: bold;
-      font-size: 10.6pt;
-      color: #1a1a1a;
-    }
-    .cert-issuer-inline {
-      color: #444b56;
-      font-style: italic;
-    }
-    .cert-description {
-      margin: 2px 0 0 0;
-      color: #333;
-      font-size: 9.5pt;
-      line-height: 1.3;
-    }
-    .block-text {
-      margin: 0;
-      text-align: justify;
-    }
+    .name { margin: 0; color: #172033; font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+    .headline { margin: 6px 0 0; color: #4c5668; font-size: 14px; font-weight: 600; line-height: 1.2; }
+    .contact-block { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; color: #4d5663; font-size: 10px; line-height: 1.35; text-align: right; overflow-wrap: anywhere; }
+    .contact-block p { margin: 0; }
+    .section-title { margin: 0 0 7px; padding: 0 0 4px; color: #172033; border-bottom: 1px solid #aeb5c0; font-size: 11px; font-weight: 700; letter-spacing: .08em; line-height: 1.2; text-transform: uppercase; break-after: avoid; }
+    .summary, .entry-body, .education-detail, .skills-line, .additional-line { margin: 0 0 3px; }
+    .entry { margin: 0 0 11px; break-inside: avoid; page-break-inside: avoid; }
+    .entry:last-child { margin-bottom: 0; }
+    .entry-heading, .compact-entry { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin: 0 0 1px; break-after: avoid; }
+    .entry-heading strong, .compact-entry strong { color: #1e2735; font-size: 11.33px; font-weight: 700; }
+    .entry-meta { flex: 0 0 auto; color: #626b77; font-size: 9.67px; white-space: nowrap; }
+    .subtitle { margin: 0 0 3px; color: #4a5564; font-size: 10.33px; font-weight: 600; }
+    ul.bullets { margin: 3px 0 0; padding: 0 0 0 16px; list-style-type: disc; }
+    ul.bullets li { margin: 0 0 1px; padding-left: 1px; }
+    .skills-label, .additional-label { color: #1e2735; font-weight: 700; }
   </style>
 </head>
-<body>
-  <table class="header">
-    <tr>
-      <td width="52%">
-        <p class="name">{{ contact.name }}</p>
-        {% if headline %}<p class="headline">{{ headline }}</p>{% endif %}
-      </td>
-      <td class="header-right" width="48%">
-        {% if contact.email %}
-        <p><span class="contact-label">Email:</span> <a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>
-        {% endif %}
-        {% if contact.phone %}
-        <p><span class="contact-label">Phone:</span> {{ contact.phone }}</p>
-        {% endif %}
-        {% if contact.linkedin %}
-        <p><span class="contact-label">LinkedIn:</span> <a href="{{ contact.linkedin }}">{{ contact.linkedin_display or contact.linkedin }}</a></p>
-        {% endif %}
-        {% if contact.github %}
-        <p><span class="contact-label">GitHub:</span> <a href="{{ contact.github }}">{{ contact.github_display or contact.github }}</a></p>
-        {% endif %}
-        {% if contact.portfolio %}
-        <p><span class="contact-label">Portfolio:</span> <a href="{{ contact.portfolio }}">{{ contact.portfolio_display or contact.portfolio }}</a></p>
-        {% endif %}
-        {% if contact.address %}
-        <p class="address-line"><span class="contact-label">Location:</span> {{ contact.address }}</p>
-        {% endif %}
-      </td>
-    </tr>
-  </table>
+<body data-document-layout="joblication-template-v2" data-template-id="{{ template_id|default('cv_professional') }}">
+{% macro component_style(component) -%}
+margin-top: {{ component.gapBefore|default(0) }}px; padding: {{ component.padding|default(0) }}px; opacity: {{ component.opacity|default(1) }}; text-align: {{ component.textAlign|default('left') }}; background: {{ component.bgColor|default('transparent') }};{% if component.bodyFontFamily %} font-family: {{ component.bodyFontFamily }};{% endif %}{% if component.bodyFontSize %} font-size: {{ component.bodyFontSize }}px;{% endif %}{% if component.bodyBold %} font-weight: 700;{% endif %}{% if component.bodyItalic %} font-style: italic;{% endif %}{% if component.bodyUnderline %} text-decoration: underline;{% endif %}{% if component.bodyColor %} color: {{ component.bodyColor }};{% endif %}
+{%- endmacro %}
+{% macro title_style(component) -%}
+{% if component.headlineFontFamily %}font-family: {{ component.headlineFontFamily }};{% endif %}{% if component.headlineFontSize %}font-size: {{ component.headlineFontSize }}px;{% endif %}{% if component.headlineBold is defined %}font-weight: {{ 700 if component.headlineBold else 400 }};{% endif %}{% if component.headlineItalic %}font-style: italic;{% endif %}{% if component.headlineUnderline %}text-decoration: underline;{% endif %}{% if component.headlineColor %}color: {{ component.headlineColor }};{% endif %}
+{%- endmacro %}
 
-  {% if summary %}<p class="summary">{{ summary }}</p>{% endif %}
-
-  {% if skills or technical_skills or soft_skills %}
-  <div class="section">
-    <p class="section-title">Skills</p>
-    {% if skills %}
-    {% for group in skills %}
-    <p class="skills-line"><span class="skills-label">{{ group.label }}:</span> {{ group.entries | join(', ') }}</p>
-    {% endfor %}
-    {% else %}
-    {% if technical_skills %}
-    <p class="skills-line"><span class="skills-label">Technical Skills:</span> {{ technical_skills }}</p>
-    {% endif %}
-    {% if soft_skills %}
-    <p class="skills-line"><span class="skills-label">Soft Skills:</span> {{ soft_skills }}</p>
-    {% endif %}
-    {% endif %}
+{% macro contact_component(component) %}
+<header class="cv-component identity-header" style="{{ component_style(component) }}" data-component="contact">
+  <div><h1 class="name" style="{{ title_style(component) }}">{{ contact.name }}</h1>{% if headline %}<p class="headline">{{ headline }}</p>{% endif %}</div>
+  <div class="contact-block">
+    {% if contact.email %}<p><a href="mailto:{{ contact.email }}">{{ contact.email }}</a></p>{% endif %}
+    {% if contact.phone %}<p>{{ contact.phone }}</p>{% endif %}{% if contact.address %}<p>{{ contact.address }}</p>{% endif %}
+    {% if contact.linkedin %}<p>{{ contact.linkedin }}</p>{% endif %}{% if contact.github %}<p>{{ contact.github }}</p>{% endif %}{% if contact.portfolio %}<p>{{ contact.portfolio }}</p>{% endif %}
   </div>
-  {% endif %}
+</header>
+{% endmacro %}
+{% macro section_open(component, title) %}<section class="cv-component section" style="{{ component_style(component) }}" data-component="{{ component.id }}"><h2 class="section-title" style="{{ title_style(component) }}">{{ title }}</h2>{% endmacro %}
 
-  {% if work_experience %}
-  <div class="section">
-    <p class="section-title">Work Experience</p>
-    {% for job in work_experience %}
-    <div class="entry">
-      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
-        <tr>
-          <td class="split-left">{{ job.title }}</td>
-          <td class="split-right">{{ job.dates }}</td>
-        </tr>
-      </table>
-      {% if job.company_line %}<p class="subtitle">{{ job.company_line }}</p>{% endif %}
-      {% if job.points %}
-      <ul class="bullets">
-        {% for point in job.points %}<li>{{ point }}</li>{% endfor %}
-      </ul>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
+{% for component in layout.sections if component.visible %}
+  {% if component.id == 'contact' %}{{ contact_component(component) }}
+  {% elif component.id == 'summary' and summary %}
+    {{ section_open(component, 'Professional Summary') }}<p class="summary">{{ summary }}</p></section>
+  {% elif component.id == 'skills' and (skills or technical_skills or soft_skills) %}
+    {{ section_open(component, 'Core Skills') }}
+    {% if skills %}{% for group in skills %}<p class="skills-line"><span class="skills-label">{{ group.label }}:</span> {{ group.entries|join(', ') }}</p>{% endfor %}
+    {% else %}{% if technical_skills %}<p class="skills-line"><span class="skills-label">Technical Skills:</span> {{ technical_skills }}</p>{% endif %}{% if soft_skills %}<p class="skills-line"><span class="skills-label">Soft Skills:</span> {{ soft_skills }}</p>{% endif %}{% endif %}</section>
+  {% elif component.id == 'experience' and work_experience %}
+    {{ section_open(component, 'Professional Experience') }}{% for job in work_experience %}<div class="entry"><p class="entry-heading"><strong>{{ job.title }}</strong>{% if job.dates %}<span class="entry-meta">{{ job.dates }}</span>{% endif %}</p>{% if job.company_line %}<p class="subtitle">{{ job.company_line }}</p>{% endif %}{% if job.points %}<ul class="bullets">{% for point in job.points %}<li>{{ point }}</li>{% endfor %}</ul>{% endif %}</div>{% endfor %}</section>
+  {% elif component.id == 'projects' and projects %}
+    {{ section_open(component, 'Selected Projects') }}{% for project in projects %}<div class="entry"><p class="entry-heading"><strong>{{ project.title }}</strong>{% if project.dates %}<span class="entry-meta">{{ project.dates }}</span>{% endif %}</p>{% if project.description %}<p class="entry-body">{{ project.description }}</p>{% endif %}</div>{% endfor %}</section>
+  {% elif component.id == 'volunteer' and volunteer %}
+    {{ section_open(component, 'Volunteer Experience') }}{% for item in volunteer %}<div class="entry"><p class="entry-heading"><strong>{{ item.title }}</strong>{% if item.dates %}<span class="entry-meta">{{ item.dates }}</span>{% endif %}</p>{% if item.organization %}<p class="subtitle">{{ item.organization }}</p>{% endif %}{% if item.points %}<ul class="bullets">{% for point in item.points %}<li>{{ point }}</li>{% endfor %}</ul>{% elif item.description %}<p class="entry-body">{{ item.description }}</p>{% endif %}</div>{% endfor %}</section>
+  {% elif component.id == 'education' and education %}
+    {{ section_open(component, 'Education') }}{% for edu in education %}<div class="entry"><p class="entry-heading"><strong>{{ edu.school }}</strong>{% if edu.dates %}<span class="entry-meta">{{ edu.dates }}</span>{% endif %}</p>{% if edu.degree_line %}<p class="entry-body">{{ edu.degree_line }}</p>{% endif %}{% if edu.gpa %}<p class="education-detail"><strong>CGPA:</strong> {{ edu.gpa }}</p>{% endif %}{% if edu.courses %}<p class="education-detail"><strong>Relevant Coursework:</strong> {{ edu.courses }}</p>{% endif %}</div>{% endfor %}</section>
+  {% elif component.id == 'certifications' and certifications %}
+    {{ section_open(component, 'Certifications') }}{% for cert in certifications %}<p class="compact-entry"><span><strong>{{ cert.title }}</strong>{% if cert.issuer %} - {{ cert.issuer }}{% endif %}</span>{% if cert.date %}<span class="entry-meta">{{ cert.date }}</span>{% endif %}</p>{% endfor %}</section>
+  {% elif component.id == 'achievements' and achievements %}
+    {{ section_open(component, 'Achievements') }}{% for item in achievements %}<div class="entry"><p class="entry-heading"><strong>{{ item.title }}</strong>{% if item.date %}<span class="entry-meta">{{ item.date }}</span>{% endif %}</p>{% if item.description %}<p class="entry-body">{{ item.description }}</p>{% endif %}</div>{% endfor %}</section>
+  {% elif component.id == 'additional' and languages %}
+    {{ section_open(component, 'Additional Information') }}<p class="additional-line"><span class="additional-label">Languages:</span> {{ languages }}</p></section>
   {% endif %}
-
-  {% if projects %}
-  <div class="section">
-    <p class="section-title">Projects</p>
-    {% for project in projects %}
-    <div class="entry">
-      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
-        <tr>
-          <td class="split-left">{{ project.title }}</td>
-          <td class="split-right">{{ project.dates }}</td>
-        </tr>
-      </table>
-      {% if project.description %}<p class="entry-body">{{ project.description }}</p>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  {% if volunteer %}
-  <div class="section">
-    <p class="section-title">Volunteer Experience</p>
-    {% for item in volunteer %}
-    <div class="entry">
-      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
-        <tr>
-          <td class="split-left">{{ item.title }}</td>
-          <td class="split-right">{{ item.dates }}</td>
-        </tr>
-      </table>
-      {% if item.organization %}<p class="subtitle">{{ item.organization }}</p>{% endif %}
-      {% if item.description %}<p class="entry-body">{{ item.description }}</p>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  {% if education %}
-  <div class="section">
-    <p class="section-title">Education</p>
-    {% for edu in education %}
-    <div class="entry">
-      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
-        <tr>
-          <td class="split-left education-school">{{ edu.school }}</td>
-          <td class="split-right">{{ edu.dates }}</td>
-        </tr>
-      </table>
-      {% if edu.degree_line %}
-      <p class="education-degree">
-        {% if edu.degree_lead %}<strong>{{ edu.degree_lead }}</strong>{% endif %}
-        {% if edu.degree_rest %} {{ edu.degree_rest }}{% endif %}
-      </p>
-      {% endif %}
-      {% if edu.gpa %}<p class="education-detail"><strong>CGPA:</strong> {{ edu.gpa }}</p>{% endif %}
-      {% if edu.courses %}<p class="education-detail"><strong>Relevant Coursework:</strong> {{ edu.courses }}</p>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  {% if certifications %}
-  <div class="section">
-    <p class="section-title">Certifications</p>
-    {% for cert in certifications %}
-    <div class="entry">
-      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
-        <tr>
-          <td class="split-left cert-name">{{ cert.title }}</td>
-          <td class="split-right">{{ cert.date }}</td>
-        </tr>
-      </table>
-      {% if cert.issuer or cert.description %}
-      <p class="cert-description">{% if cert.issuer %}<span class="cert-issuer-inline">{{ cert.issuer }}</span>{% if cert.description %} — {% endif %}{% endif %}{{ cert.description }}</p>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  {% if achievements %}
-  <div class="section">
-    <p class="section-title">Achievements</p>
-    {% for item in achievements %}
-    <div class="entry">
-      <table class="entry-row{% if not loop.first %} entry-row--spaced{% endif %}">
-        <tr>
-          <td class="split-left">{{ item.title }}</td>
-          <td class="split-right">{{ item.date }}</td>
-        </tr>
-      </table>
-      {% if item.description %}<p class="entry-body">{{ item.description }}</p>{% endif %}
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  {% if languages or interests %}
-  <div class="section">
-    <p class="section-title">Additional Information</p>
-    {% if languages %}<p class="skills-line"><span class="skills-label">Languages:</span> {{ languages }}</p>{% endif %}
-    {% if interests %}<p class="skills-line"><span class="skills-label">Interests:</span> {{ interests }}</p>{% endif %}
-  </div>
-  {% endif %}
+{% endfor %}
 </body>
 </html>

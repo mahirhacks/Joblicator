@@ -26,7 +26,7 @@ PROJECT_ROOT = ENGINE_DIR.parent.parent
 if str(ENGINE_DIR) not in sys.path:
     sys.path.insert(0, str(ENGINE_DIR))
 
-from utils import load_config, load_json, resolve_path  # noqa: E402
+from utils import load_config, load_json, resolve_output_path, resolve_path  # noqa: E402
 
 
 STRUCTURAL_PATHS = (
@@ -160,10 +160,9 @@ def _run_stage_3_once(
 ) -> dict:
     import stage_3  # noqa: WPS433
 
-    content, _, body_count, _ = stage_3._generate_letter_content(
+    return stage_3.process_application(
         config, app_key, stage1_entry, application, profile, stage2_entry
     )
-    return content
 
 
 def run_stability_test(
@@ -181,16 +180,37 @@ def run_stability_test(
         config.setdefault("stage_3", {}).setdefault("verification", {})["enabled"] = False
         config.setdefault("stage_3", {}).setdefault("parser_verification", {})["enabled"] = False
 
-    profile = load_json(resolve_path(config, "profile.json"))
-    applications = load_json(resolve_path(config, "applications.json"))
-    stage1 = load_json(resolve_path(config, "stages.stage_1"))
+    profile = load_json(
+        resolve_path(config, "profile", "json", "settings/local_profile.json")
+    )
+    applications = load_json(
+        resolve_path(
+            config,
+            "applications",
+            "json",
+            "applications/local_applications.json",
+        )
+    )
+    stage1 = load_json(
+        resolve_output_path(
+            config,
+            "stage_1",
+            "engine/dynamic_engine/data/stage_1.json",
+        )
+    )
 
     chosen_key = _pick_app_key(stage1, app_key)
     stage1_entry = stage1[chosen_key]
-    application = applications.get(chosen_key, {})
+    source_slug = str(stage1_entry.get("source_slug", "")).strip()
+    application = applications.get(source_slug, {})
+    if not isinstance(application, dict) or not application:
+        raise SystemExit(
+            f"Application {chosen_key} points to missing source slug: {source_slug or '<empty>'}"
+        )
 
     fingerprints: list[dict[str, Any]] = []
     hashes: list[str] = []
+    quality_runs: list[dict[str, Any]] = []
     run_dir = Path(tempfile.mkdtemp(prefix="joblication_stability_"))
 
     print(f"Stability test: {runs} run(s), app={chosen_key}, stage={stage}", file=sys.stderr)
@@ -216,6 +236,24 @@ def run_stability_test(
             content = _run_stage_3_once(
                 config, chosen_key, stage1_entry, application, profile, stage2_entry
             )
+            import stage_3  # noqa: WPS433
+            from letter_quality import assess_letter_quality, letter_word_count  # noqa: WPS433
+
+            body_count = stage_3._body_paragraph_count(config)
+            quality_issues = assess_letter_quality(
+                content,
+                body_count,
+                stage2_entry,
+                max_body_words=stage_3._body_paragraph_max_words(config),
+            )
+            quality_runs.append(
+                {
+                    "run": run_index,
+                    "passed": not quality_issues,
+                    "word_count": letter_word_count(content),
+                    "issues": quality_issues,
+                }
+            )
             fp = structural_fingerprint(content, stage="stage_3")
             out_path = run_dir / f"run_{run_index}_stage_3.json"
             out_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -234,7 +272,11 @@ def run_stability_test(
         "unique_content_hashes": len(unique_hashes),
         "fingerprints": fingerprints,
         "structural_drift": drift,
-        "stable": not drift and len(unique_hashes) <= 1,
+        "quality_runs": quality_runs,
+        "quality_passed": bool(quality_runs) and all(item["passed"] for item in quality_runs),
+        "stable": not drift and len(unique_hashes) <= 1 and all(
+            item["passed"] for item in quality_runs
+        ),
     }
 
     print(json.dumps(report, indent=2, ensure_ascii=False))

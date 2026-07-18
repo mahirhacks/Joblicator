@@ -2,117 +2,118 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>{{ contact.name }} — Cover Letter</title>
+  <title>{{ contact.name }} - Cover Letter</title>
   <style>
     @page {
       size: A4;
-      margin: 2.0cm 2.2cm;
+      margin: 1.75cm 1.95cm 1.9cm;
     }
+    * {
+      box-sizing: border-box;
+    }
+    html,
     body {
-      font-family: Arial, Helvetica, sans-serif;
-      font-size: 10.8pt;
-      line-height: 1.5;
-      color: #1a1a1a;
       margin: 0;
       padding: 0;
     }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-    }
-    td {
-      vertical-align: top;
-      padding: 0;
+    body {
+      color: #20252b;
+      background: #ffffff;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.58;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
     }
     a {
-      color: #1f3a5f;
+      color: inherit;
       text-decoration: none;
     }
+    .sender {
+      padding-bottom: 0.45cm;
+      margin-bottom: 0.45cm;
+      border-bottom: 1.5pt solid #20252b;
+    }
     .sender-name {
-      font-size: 15pt;
+      margin: 0;
+      color: #172033;
+      font-size: 21pt;
       font-weight: bold;
-      color: #17263b;
-      margin: 0 0 4px 0;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
     }
     .sender-line {
-      font-size: 9.5pt;
-      color: #5a6472;
-      margin: 0 0 2px 0;
+      margin: 0.14cm 0 0;
+      color: #59616d;
+      font-size: 7.75pt;
+      line-height: 1.35;
     }
-    .date-cell {
-      text-align: right;
-      font-size: 9.5pt;
-      color: #5a6472;
-      padding-top: 4px;
+    .letter-details {
+      margin: 0 0 0.36cm;
+      line-height: 1.45;
     }
-    .recipient {
-      margin: 26px 0 0 0;
+    .letter-details p,
+    .letter-details time {
+      display: block;
+      margin: 0;
     }
-    .recipient p {
-      margin: 0 0 2px 0;
+    .letter-details time {
+      margin-bottom: 0.32cm;
     }
     .subject {
+      margin: 0.32cm 0 0;
+      color: #172033;
       font-weight: bold;
-      color: #17263b;
-      margin: 18px 0 0 0;
     }
-    p.salutation {
-      margin: 18px 0 0 0;
+    .salutation {
+      margin: 0.42cm 0 0.15cm;
     }
-    p.body-text {
-      margin: 14px 0 0 0;
-      text-align: justify;
-    }
-    p.closing-text {
-      margin: 14px 0 0 0;
-      text-align: justify;
+    .body-text,
+    .closing-text {
+      margin: 0 0 0.34cm;
+      orphans: 3;
+      widows: 3;
     }
     .sign-off {
-      margin-top: 26px;
+      display: flex;
+      flex-direction: column;
+      min-height: 1.35cm;
+      margin-top: 0.38cm;
     }
     .sign-off .line {
       margin: 0;
     }
-    .sign-off .line.name {
-      margin-top: 22px;
-    }
   </style>
 </head>
-<body>
-  <table>
-    <tr>
-      <td width="60%">
-        <p class="sender-name">{{ contact.name }}</p>
-        {% if contact.address %}<p class="sender-line">{{ contact.address }}</p>{% endif %}
-        {% if contact.email %}<p class="sender-line">{{ contact.email }}</p>{% endif %}
-        {% if contact.phone %}<p class="sender-line">{{ contact.phone }}</p>{% endif %}
-        {% if contact.linkedin %}<p class="sender-line">{{ contact.linkedin }}</p>{% endif %}
-      </td>
-      <td class="date-cell" width="40%">
-        {% if date %}{{ date }}{% endif %}
-      </td>
-    </tr>
-  </table>
+<body data-document-layout="joblication-live-v1">
+  <header class="sender">
+    <h1 class="sender-name">{{ contact.name }}</h1>
+    {% if contact.email or contact.phone or contact.address %}
+    <p class="sender-line">
+      {% if contact.email %}{{ contact.email }}{% endif %}
+      {% if contact.email and contact.phone %} | {% endif %}
+      {% if contact.phone %}{{ contact.phone }}{% endif %}
+      {% if (contact.email or contact.phone) and contact.address %} | {% endif %}
+      {% if contact.address %}{{ contact.address }}{% endif %}
+    </p>
+    {% endif %}
+  </header>
 
-  <div class="recipient">
-    <p>{{ addressee }}</p>
+  <section class="letter-details">
+    {% if date %}<time>{{ date }}</time>{% endif %}
+    <p>{{ addressee or "Hiring Manager" }}</p>
     {% if company_name %}<p>{{ company_name }}</p>{% endif %}
-  </div>
-
-  {% if subject_line %}
-  <div class="subject">{{ subject_line }}</div>
-  {% endif %}
+    {% if role_title %}<p>{{ role_title }}</p>{% endif %}
+    {% if subject_line %}<p class="subject"><strong>Re:</strong> {{ subject_line }}</p>{% endif %}
+  </section>
 
   <p class="salutation">Dear {{ addressee or "Hiring Manager" }},</p>
-
   {% if opening_paragraph %}<p class="body-text">{{ opening_paragraph }}</p>{% endif %}
   {% for paragraph in body_paragraphs %}<p class="body-text">{{ paragraph }}</p>{% endfor %}
   {% if closing_paragraph %}<p class="closing-text">{{ closing_paragraph }}</p>{% endif %}
 
   <div class="sign-off">
-    {% for line in sign_off_lines %}
-    <p class="line{% if loop.last and sign_off_lines|length > 1 %} name{% endif %}">{{ line }}</p>
-    {% endfor %}
+    {% for line in sign_off_lines %}<p class="line">{{ line }}</p>{% endfor %}
   </div>
 </body>
 </html>

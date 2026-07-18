@@ -181,7 +181,6 @@ class JoblicationHandler(BaseHTTPRequestHandler):
             self._respond(*handlers.start_generate(body))
             return True
         if len(parts) == 3 and parts[1] == "build":
-            body = self._read_body()
             self._respond(*handlers.rebuild_application(parts[2], body))
             return True
         if parts == ["api", "templates"]:

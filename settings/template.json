@@ -8,7 +8,140 @@
             "name": "Professional CV",
             "category": "cv",
             "path": "templates/cv/professional.html.j2",
-            "description": "Clean single-column ATS-safe layout for general roles"
+            "description": "Clean single-column ATS-safe layout for general roles",
+            "layout": {
+                "version": 2,
+                "pageWidth": 794,
+                "pageHeight": 1123,
+                "pagePadding": 60,
+                "pageBackground": "#ffffff",
+                "fontSize": 13.333,
+                "lineHeight": 1.42,
+                "fontFamily": "Arial, Helvetica, sans-serif",
+                "zoom": 0.7,
+                "sections": [
+                    {
+                        "id": "contact",
+                        "label": "Contact",
+                        "visible": true,
+                        "locked": true,
+                        "gapBefore": 0,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "summary",
+                        "label": "Professional Summary",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "skills",
+                        "label": "Core Skills",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "experience",
+                        "label": "Professional Experience",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "projects",
+                        "label": "Selected Projects",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "volunteer",
+                        "label": "Volunteer Experience",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "education",
+                        "label": "Education",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "certifications",
+                        "label": "Certifications",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "achievements",
+                        "label": "Achievements",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    },
+                    {
+                        "id": "additional",
+                        "label": "Additional Information",
+                        "visible": true,
+                        "locked": false,
+                        "gapBefore": 24,
+                        "padding": 0,
+                        "opacity": 1,
+                        "textAlign": "left",
+                        "bgColor": "#ffffff",
+                        "typography": {}
+                    }
+                ]
+            }
         },
         "cover_letter_formal": {
             "name": "Formal Cover Letter",
@@ -18,7 +151,9 @@
         }
     },
     "export": {
-        "formats": ["pdf"],
+        "formats": [
+            "pdf"
+        ],
         "filename_pattern": "{company}_{role}_{date}",
         "output_dir": "outputs",
         "date_format": "YYYYMMDD"

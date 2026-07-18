@@ -22,6 +22,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from batch_resilience import (
+    failure_record,
+    fit_score,
+    is_buildable,
+    payload_status,
+    process_with_resilience,
+)
 from grounding import (
     build_claims_ledger,
     build_gap_disclosures,
@@ -32,7 +39,13 @@ from grounding import (
     sanitize_profile,
     strip_letter_claim_violations,
 )
-from letter_autofix import autofix_letter_prose, autofix_until_clean, finalize_letter_repairs
+from letter_autofix import autofix_letter_prose, autofix_until_clean
+from letter_quality import (
+    assess_letter_quality,
+    enrich_thin_bodies_from_cv,
+    ensure_employer_reference_outside_opening,
+    strip_unsupported_scope_sentences,
+)
 from style_validator import scan_letter_style
 from ollama import (
     call_ollama,
@@ -108,18 +121,11 @@ _PLACEHOLDER_COUNT_RE = re.compile(r"\b[XxNn]\+")
 def _honesty_settings(config: dict) -> dict[str, Any]:
     raw = config.get("stage_3", {}).get("honesty", {})
     try:
-        gap_index = int(raw.get("gap_paragraph_index", 2))
-    except (TypeError, ValueError):
-        gap_index = 2
-    try:
         max_gaps = int(raw.get("max_gaps_in_letter", 3))
     except (TypeError, ValueError):
         max_gaps = 3
     return {
         "use_stage_2_claims": bool(raw.get("use_stage_2_claims", True)),
-        "deterministic_gap_paragraph": bool(raw.get("deterministic_gap_paragraph", True)),
-        "gap_paragraph_index": max(1, gap_index),
-        "smooth_gap_paragraph": bool(raw.get("smooth_gap_paragraph", True)),
         "max_gaps_in_letter": max(1, max_gaps),
     }
 
@@ -204,6 +210,7 @@ def _apply_deterministic_letter_autofix(
     app_key: str,
     content: dict[str, Any],
     body_count: int,
+    stage2_entry: dict[str, Any] | None = None,
     *,
     aggressive: bool = False,
 ) -> bool:
@@ -235,14 +242,18 @@ def _apply_deterministic_letter_autofix(
             skip_body_indices=skip,
             max_words=max_words,
         )
-        if finalize_letter_repairs(
-            content,
-            body_count,
-            max_words=max_words,
-            gaps_addressed=gaps,
-            skip_body_indices=skip,
-        ):
-            changed = True
+    if strip_unsupported_scope_sentences(content, body_count, stage2_entry):
+        changed = True
+    if ensure_employer_reference_outside_opening(content, body_count):
+        changed = True
+    if enrich_thin_bodies_from_cv(
+        content,
+        body_count,
+        stage2_entry,
+        min_words=45,
+        max_words=max_words,
+    ):
+        changed = True
     if changed:
         print(f"  auto-fix: letter prose patched (claims/style/labels)", file=sys.stderr)
     return changed
@@ -316,22 +327,36 @@ def build_letter_header(profile: dict) -> dict[str, Any]:
 
 
 def _infer_company_name(stage1_entry: dict[str, Any], application: dict) -> str:
+    generic_names = {"", "company", "the company", "employer", "the employer", "organization"}
+
+    def usable(value: Any) -> str:
+        text = str(value or "").strip()
+        return text if text.lower() not in generic_names else ""
+
     for key in ("company", "company_name", "employer", "organization"):
-        value = application.get(key)
-        if value and str(value).strip():
-            return str(value).strip()
+        value = usable(application.get(key))
+        if value:
+            return value
 
     summary = str(stage1_entry.get("context", {}).get("company_summary", "")).strip()
     if "|" in summary:
-        return summary.split("|")[0].strip()
+        candidate = usable(summary.split("|")[0])
+        if candidate:
+            return candidate
     lower = summary.lower()
     if " is " in lower:
-        return summary[: lower.index(" is ")].strip()
-    if summary:
+        candidate = usable(summary[: lower.index(" is ")])
+        if candidate:
+            return candidate
+    if usable(summary) and not lower.startswith(("the employer ", "the company ", "company ")):
         return summary.split(".")[0].strip()[:100]
 
     slug = str(stage1_entry.get("source_slug", "")).strip()
-    return slug.replace("_", " ").title() if slug else "Company"
+    if slug:
+        words = slug.split("_")
+        company = " ".join(word.upper() if word.lower() in {"lgms", "ib", "ibm"} else word.title() for word in words)
+        return company
+    return "Company"
 
 
 def _build_sign_off(profile: dict) -> str:
@@ -358,32 +383,32 @@ def _stage2_block(stage2: dict[str, Any], app_key: str) -> dict[str, Any]:
 
 
 def _tailoring_context(stage1_entry: dict[str, Any], application: dict) -> dict[str, Any]:
+    """Compact stage-3 context; stage 2 already consumed the full posting."""
+    context = stage1_entry.get("context", {})
+    if not isinstance(context, dict):
+        context = {}
     return {
         "title": stage1_entry.get("title", application.get("title", "")),
-        "source_slug": stage1_entry.get("source_slug", ""),
-        "context": stage1_entry.get("context", {}),
-        "resume_keywords": stage1_entry.get("resume_keywords", {}),
-        "job_posting": {
-            "title": application.get("title", ""),
-            "location": application.get("location", ""),
-            "text": application_text(application),
-        },
+        "company": _infer_company_name(stage1_entry, application),
+        "location": application.get("location", ""),
+        "company_summary": context.get("company_summary", ""),
+        "role_summary": context.get("role_summary", ""),
+        "must_have": context.get("must_have", []),
+        "nice_to_have": context.get("nice_to_have", []),
+        "work_mode": context.get("work_mode", "unknown"),
     }
 
 
 def _resume_draft(stage2_entry: dict[str, Any]) -> dict[str, Any]:
+    """Evidence-only CV slice without duplicated gap and claims metadata."""
     keys = (
         "executive_summary",
-        "education",
         "work_experience",
         "projects",
         "skills",
         "achievements",
         "certifications",
-        "interests",
-        "claims_to_avoid",
-        "gaps_addressed",
-        "claims_ledger",
+        "education",
     )
     return {key: stage2_entry[key] for key in keys if key in stage2_entry}
 
@@ -393,13 +418,13 @@ def _letter_guidance_block(
     gaps_addressed: list[str],
     claims_ledger: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    del gaps_addressed  # Gap disclosures are metadata, never advocacy prose.
     block: dict[str, Any] = {
         "letter_guidance": {
             "claims_to_avoid": claims_to_avoid,
-            "gaps_addressed": gaps_addressed,
-        "rules": [
+            "rules": [
                 "Never state or imply anything in claims_to_avoid.",
-                "Use gaps_addressed phrasing when acknowledging weaknesses — do not invent new gap language.",
+                "Never mention missing qualifications; advocate only with supported evidence.",
             ],
         },
     }
@@ -506,30 +531,11 @@ def _finalize_letter_prose(
     app_key: str | None = None,
     strengths: list[str] | None = None,
 ) -> dict[str, Any]:
+    del gaps_addressed, app_key, strengths
     max_words = _body_paragraph_max_words(config)
     opening = _strip_salutation(str(prose.get("opening_paragraph", "")).strip())
     body = _normalize_body_paragraphs(prose.get("body_paragraphs", []), body_count)
     closing = str(prose.get("closing_paragraph", "")).strip()
-
-    honesty = _honesty_settings(config)
-    letter_gaps = _gaps_for_letter(config, gaps_addressed)
-    if honesty["deterministic_gap_paragraph"] and letter_gaps:
-        gap_index = honesty["gap_paragraph_index"]
-        if 1 <= gap_index <= len(body):
-            gap_text = _fix_paragraph_spacing(" ".join(letter_gaps))
-            if app_key:
-                gap_text = smooth_gap_paragraph(
-                    config, app_key, gap_text, letter_gaps, max_words, strengths=strengths
-                )
-            gap_text, was_trimmed = enforce_max_words(gap_text, max_words)
-            if was_trimmed:
-                print(
-                    f"  letter_prose: deterministic gap paragraph trimmed to "
-                    f"{count_words(gap_text)}/{max_words} words",
-                    file=sys.stderr,
-                )
-            body[gap_index - 1] = gap_text
-            print("  letter_prose: applied deterministic gap disclosure paragraph", file=sys.stderr)
 
     trimmed_body: list[str] = []
     for index, paragraph in enumerate(body, start=1):
@@ -562,6 +568,7 @@ def loop_letter_prose(
     gaps_addressed: list[str],
     improvement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    del profile
     max_words = _body_paragraph_max_words(config)
     prior = improvement.get("prior_draft") if isinstance(improvement, dict) else None
     prior_prose = prior if isinstance(prior, dict) else {}
@@ -578,15 +585,13 @@ def loop_letter_prose(
                 "rule": f"Each body paragraph: hard limit of {max_words} words.",
             },
             "tailoring": _tailoring_context(stage1_entry, application),
-            "fit_review": stage2_entry.get("fit_review", {}),
+            "fit_strengths": stage2_entry.get("fit_review", {}).get("strengths", []),
             "resume_draft": _resume_draft(stage2_entry),
             "cross_document_note": (
                 "resume_draft and claims_manifest are the source of truth from stage_2. "
-                "Do not contradict claims_to_avoid or overstate beyond gaps_addressed honesty level."
+                "Do not contradict claims_to_avoid or exceed the scope of CV evidence."
             ),
-        "candidate_cv": profile_for_prompt(profile),
             **letter_guidance,
-            **keyword_prompt_block(keyword_pool),
             "reply_format": (
                 f"Plain text: OPENING, BODY_1..BODY_{body_count}, CLOSING labeled sections — see system prompt."
             ),
@@ -846,6 +851,7 @@ def parse_letter_issues(
     max_body_words: int = 0,
     style_check: bool = True,
     config: dict | None = None,
+    stage2_entry: dict[str, Any] | None = None,
 ) -> dict[str, list[str]]:
     issues_by_section: dict[str, list[str]] = {}
 
@@ -917,6 +923,15 @@ def parse_letter_issues(
         style_issues = scan_letter_style(content)
         if style_issues:
             issues_by_section["_document_style"] = style_issues
+
+    quality_issues = assess_letter_quality(
+        content,
+        body_count,
+        stage2_entry,
+        max_body_words=max_body_words or 110,
+    )
+    if quality_issues:
+        issues_by_section["_quality_gate"] = quality_issues
 
     return issues_by_section
 
@@ -1014,13 +1029,8 @@ def _expected_review_keys(sections_to_rate: dict[str, Any]) -> set[str]:
 
 
 def _gap_paragraph_skip_index(config: dict) -> set[int]:
-    honesty = _honesty_settings(config)
-    if not honesty["deterministic_gap_paragraph"]:
-        return set()
-    gap_index = honesty["gap_paragraph_index"]
-    if gap_index < 1:
-        return set()
-    return {gap_index - 1}
+    del config
+    return set()
 
 
 def _paragraph_needs_rewrite(paragraph: str, min_words: int = 18) -> bool:
@@ -1050,7 +1060,9 @@ def _resolve_claim_violations_in_letter(
     if strip_letter_claim_violations(content, body_count, skip_body_indices=skip):
         print(f"  stripped sentence(s) echoing claims_to_avoid", file=sys.stderr)
 
-    if _apply_deterministic_letter_autofix(config, app_key, content, body_count):
+    if _apply_deterministic_letter_autofix(
+        config, app_key, content, body_count, stage2_entry
+    ):
         return not letter_has_claim_violations(content)
 
     body = _normalize_body_paragraphs(content.get("body_paragraphs", []), body_count)
@@ -1082,7 +1094,7 @@ def _resolve_claim_violations_in_letter(
             ],
             "instruction": (
                 "Rewrite the full letter. Remove any line that restates claims_to_avoid literally. "
-                "Keep gap honesty using gaps_addressed tone, not the raw gap text."
+                "Do not mention gaps or missing qualifications anywhere in the letter."
             ),
         },
     )
@@ -1091,7 +1103,7 @@ def _resolve_claim_violations_in_letter(
 
 def _prose_parser_issues(parser_issues: dict[str, list[str]]) -> list[str]:
     issues: list[str] = []
-    for key in (*PARSER_SECTIONS, "_document_style"):
+    for key in (*PARSER_SECTIONS, "_document_style", "_quality_gate"):
         issues.extend(parser_issues.get(key, []))
     return issues
 
@@ -1107,6 +1119,7 @@ def verify_letter(
     body_count: int,
     locked_sections: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
+    del profile
     locked_sections = locked_sections or {}
     letter_sections = _letter_sections_for_review(content, body_count)
     sections_to_rate = _sections_to_rate(letter_sections, locked_sections)
@@ -1116,14 +1129,11 @@ def verify_letter(
     if sections_to_rate:
         prompt = {
             "task": "Rate each cover letter section and provide improvement feedback.",
-            "job_description": application_text(application),
-            "job_title": stage1_entry.get("title", application.get("title", "")),
-            "job_context": stage1_entry.get("context", {}),
-            "candidate_cv": profile_for_prompt(profile),
+            "tailoring": _tailoring_context(stage1_entry, application),
             "resume_draft": _resume_draft(stage2_entry),
             "cross_document_note": (
                 "resume_draft and claims_manifest are the source of truth from stage_2. "
-                "Do not contradict claims_to_avoid or overstate beyond gaps_addressed honesty level."
+                "Do not contradict claims_to_avoid or exceed the scope of CV evidence."
             ),
             "claims_to_avoid": content.get("claims_to_avoid", []),
             "letter_sections": sections_to_rate,
@@ -1346,7 +1356,13 @@ def parser_verify_and_regenerate_letter(
 
     for pass_num in range(1, max_passes + 1):
         issues_by_section = parse_letter_issues(
-            scan_content, body_count, has_gaps, max_body_words, style_check=style_check, config=config
+            scan_content,
+            body_count,
+            has_gaps,
+            max_body_words,
+            style_check=style_check,
+            config=config,
+            stage2_entry=stage2_entry,
         )
         if not issues_by_section:
             print(f"Stage 3 — {app_key}: parser verification passed", file=sys.stderr)
@@ -1365,7 +1381,14 @@ def parser_verify_and_regenerate_letter(
         if prose_issues:
             autofix_handled = False
             if _parser_autofix_enabled(config):
-                _apply_deterministic_letter_autofix(config, app_key, content, body_count, aggressive=True)
+                _apply_deterministic_letter_autofix(
+                    config,
+                    app_key,
+                    content,
+                    body_count,
+                    stage2_entry,
+                    aggressive=True,
+                )
                 meta = {key: content[key] for key in META_CONTENT_KEYS if key in content}
                 content.update(polish_letter_output(_content_without_meta(content), body_count))
                 content.update(meta)
@@ -1378,6 +1401,7 @@ def parser_verify_and_regenerate_letter(
                         max_body_words,
                         style_check=style_check,
                         config=config,
+                        stage2_entry=stage2_entry,
                     )
                 ):
                     print(f"Stage 3 — {app_key}: parser issues cleared by auto-fix", file=sys.stderr)
@@ -1462,16 +1486,35 @@ def parser_verify_and_regenerate_letter(
         scan_content = _content_without_meta(content)
 
     unresolved = parse_letter_issues(
-        scan_content, body_count, has_gaps, max_body_words, style_check=style_check, config=config
+        scan_content,
+        body_count,
+        has_gaps,
+        max_body_words,
+        style_check=style_check,
+        config=config,
+        stage2_entry=stage2_entry,
     )
     if unresolved and _prose_parser_issues(unresolved) and _parser_autofix_enabled(config):
-        _apply_deterministic_letter_autofix(config, app_key, content, body_count, aggressive=True)
+        _apply_deterministic_letter_autofix(
+            config,
+            app_key,
+            content,
+            body_count,
+            stage2_entry,
+            aggressive=True,
+        )
         meta = {key: content[key] for key in META_CONTENT_KEYS if key in content}
         content.update(polish_letter_output(_content_without_meta(content), body_count))
         content.update(meta)
         scan_content = _content_without_meta(content)
         unresolved = parse_letter_issues(
-            scan_content, body_count, has_gaps, max_body_words, style_check=style_check, config=config
+            scan_content,
+            body_count,
+            has_gaps,
+            max_body_words,
+            style_check=style_check,
+            config=config,
+            stage2_entry=stage2_entry,
         )
 
     if unresolved and _prose_parser_issues(unresolved):
@@ -1498,7 +1541,13 @@ def parser_verify_and_regenerate_letter(
             content.update(meta)
             scan_content = _content_without_meta(content)
             unresolved = parse_letter_issues(
-                scan_content, body_count, has_gaps, max_body_words, style_check=style_check, config=config
+                scan_content,
+                body_count,
+                has_gaps,
+                max_body_words,
+                style_check=style_check,
+                config=config,
+                stage2_entry=stage2_entry,
             )
 
     content["parser_review"] = _build_parser_review(unresolved)
@@ -1526,7 +1575,10 @@ def _generate_letter_content(
     profile: dict,
     stage2_entry: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str], int, bool]:
-    master_keywords = build_master_keywords(stage1_entry.get("resume_keywords", {}), config)
+    keyword_source = stage1_entry.get("resume_keyword_groups") or stage1_entry.get(
+        "resume_keywords", {}
+    )
+    master_keywords = build_master_keywords(keyword_source, config, grounding_source=profile)
     keyword_pool = KeywordPool(master_keywords)
     body_count = _body_paragraph_count(config)
 
@@ -1650,20 +1702,79 @@ def run(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         for index, app_key, slug, application in iter_applications(applications):
             try:
                 stage1_entry = _stage1_block(stage1, app_key)
+            except ValueError as exc:
+                print(f"Warning: {exc}", file=sys.stderr)
+                updates[app_key] = failure_record(
+                    stage="stage_3",
+                    app_key=app_key,
+                    title=str(application.get("title", "")),
+                    status="skipped_dependency",
+                    attempts=0,
+                    fit=None,
+                    errors=[str(exc)],
+                    dependency="stage_1",
+                )
+                partial_payload = _merge_payload(existing, header, static_header, updates)
+                partial_payload["pipeline_status"] = "RUNNING"
+                export_json(partial_payload, out_path)
+                continue
+
+            try:
                 stage2_entry = _stage2_block(stage2, app_key)
             except ValueError as exc:
                 print(f"Warning: {exc}", file=sys.stderr)
+                updates[app_key] = failure_record(
+                    stage="stage_3",
+                    app_key=app_key,
+                    title=str(stage1_entry.get("title", application.get("title", ""))),
+                    status="skipped_dependency",
+                    attempts=0,
+                    fit=None,
+                    errors=[str(exc)],
+                    dependency="stage_2",
+                )
+                partial_payload = _merge_payload(existing, header, static_header, updates)
+                partial_payload["pipeline_status"] = "RUNNING"
+                export_json(partial_payload, out_path)
+                continue
+
+            if not is_buildable(stage1_entry) or not is_buildable(stage2_entry):
+                dependency = "stage_1" if not is_buildable(stage1_entry) else "stage_2"
+                updates[app_key] = failure_record(
+                    stage="stage_3",
+                    app_key=app_key,
+                    title=str(stage1_entry.get("title", application.get("title", ""))),
+                    status="skipped_dependency",
+                    attempts=0,
+                    fit=fit_score(stage2_entry),
+                    errors=[],
+                    dependency=dependency,
+                )
+                partial_payload = _merge_payload(existing, header, static_header, updates)
+                partial_payload["pipeline_status"] = "RUNNING"
+                export_json(partial_payload, out_path)
                 continue
 
             if stage1_entry.get("source_slug") and stage1_entry["source_slug"] != slug:
                 application = slug_to_application.get(stage1_entry["source_slug"], application)
 
-            updates[app_key] = process_application(
-                config, app_key, stage1_entry, application, profile, stage2_entry
+            updates[app_key] = process_with_resilience(
+                config,
+                stage="stage_3",
+                app_key=app_key,
+                title=str(stage1_entry.get("title", application.get("title", ""))),
+                previous=existing.get(app_key) if isinstance(existing.get(app_key), dict) else None,
+                fallback_fit=fit_score(stage2_entry),
+                generate=lambda app_key=app_key, stage1_entry=stage1_entry, application=application, stage2_entry=stage2_entry: process_application(
+                    config, app_key, stage1_entry, application, profile, stage2_entry
+                ),
             )
+            partial_payload = _merge_payload(existing, header, static_header, updates)
+            partial_payload["pipeline_status"] = "RUNNING"
+            export_json(partial_payload, out_path)
 
         payload = _merge_payload(existing, header, static_header, updates)
-        payload["pipeline_status"] = "OK"
+        payload["pipeline_status"] = payload_status(updates)
         export_json(payload, out_path)
         clear_pipeline_failure_report(default_failure_report_path())
         return payload

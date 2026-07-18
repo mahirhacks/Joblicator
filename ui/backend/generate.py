@@ -149,7 +149,7 @@ def generate(
     slugs: list[str] | None = None,
     build_targets: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Run pipeline stages from from_stage onward. Raises on first failure."""
+    """Run stages from ``from_stage``; per-app failures are recorded and isolated."""
     _setup_paths()
 
     from utils import configure_stdio_utf8, ensure_project_path  # noqa: E402

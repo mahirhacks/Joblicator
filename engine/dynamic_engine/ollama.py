@@ -250,7 +250,7 @@ def _format_ollama_failure(config: dict, data: dict[str, Any], *, raw: str = "")
     hints = [
         f"Confirm Ollama is running and the model is pulled: ollama pull {model}",
         "Check VRAM/RAM — gemma4:26b needs ~16 GB+ at Q4 quantization",
-        "Try a smaller model in engine/dynamic_engine/config.yaml (e.g. gemma4:e4b)",
+        "Try a smaller model in config.yaml (e.g. gemma4:e4b)",
     ]
     if raw and "\n" in raw:
         hints.insert(0, "Received a partial streaming response — retry, or restart Ollama")

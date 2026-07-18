@@ -11,6 +11,16 @@ _GROUNDING_RULES = """
 - candidate_cv and resume_draft are the only sources of truth.
 - resume_draft is the tailored CV from stage 2 — the letter must not contradict it.
 - Never invent employers, degrees, certifications, tools, metrics, or project outcomes.
+- Copy employment titles exactly from resume_draft. Never relabel a past job with the target title
+  (for example, never turn "Junior Penetration Tester" into "VAPT Engineer").
+- Preserve scope as well as facts: testing/review/advisory work must not become ownership, securing,
+  implementation, leadership, or authority unless resume_draft explicitly says so.
+- Do not repurpose a real project into unsupported work. Using LLMs/RAG is not LLM security testing;
+  vulnerability-risk research is not AI red teaming unless resume_draft explicitly says it is.
+- Avoid unsupported magnitude and seniority language such as "deep expertise", "extensive work",
+  "high-stakes", "significantly reduced", "seasoned", or "proven track record".
+- Do not invent benefit language for projects. Never say a tool improved accuracy, performance,
+  efficiency, scalability, security, or user experience unless that outcome appears in resume_draft.
 - If claims_to_avoid or claims_ledger appears in the user message: never state or imply those phrases.
 - Never name a certification, tool, methodology, or years-of-experience figure the candidate does NOT
   have — not even to admit the candidate lacks it. A cover letter argues the case for the candidate;
@@ -38,7 +48,9 @@ _LETTER_BANNED = """
 
 _VOICE_RULE = """
 ## Voice
-- First person with literal "I" in every sentence.
+- First person, active voice. Use "I" naturally, but vary sentence construction so the prose does not
+  become a stack of "I ... I ... I ..." statements.
+- Never start more than three consecutive sentences with "I".
 - Professional, warm, human — like a competent peer writing to a hiring manager.
 - Not stiff corporate speak. Not salesy. Not desperate.
 - Vary sentence length. No bullet points inside the letter."""
@@ -58,7 +70,8 @@ Write OPENING: then the paragraph. The salutation is added by the template — b
 3. Sentence 3 (optional): a second short proof or the bridge between your two domains.
 4. Sentence 4 (optional): why this role fits your trajectory — grounded, no company flattery.
 
-Every sentence must contain at least one specific noun from resume_draft (a tool, project name, employer, or certification).
+Include at least one specific noun from resume_draft in the paragraph (a tool, project name, employer,
+or certification). Do not turn the opening into a list.
 Do NOT: repeat your name (it's in the header). Do NOT list every cert. Do NOT use abstract identity soup like "My background integrates X with Y" twice in a row."""
 
 _BODY_GUIDE = """
@@ -74,7 +87,6 @@ You must output exactly total_paragraphs body sections (BODY_1, BODY_2, ...) fro
   the candidate lacks — every body paragraph exists to add evidence, not to subtract it.
 
 ### Body writing rules
-- Every sentence starts with "I" + verb.
 - 3-5 sentences per body paragraph — a one-sentence paragraph reads as filler and fails review.
 - Name real tools, methods, and outcomes from resume_draft — not vague "various technologies".
 - Keep each tool attached to the project where resume_draft actually uses it — never move a
@@ -181,6 +193,12 @@ Rate letter_prose as one unified document (opening + all body paragraphs + closi
 - Openings with zero concrete proof (no named project/employer/cert).
 - Any paragraph that never references the employer's product, domain, or requirements.
 - Salutations inside opening_paragraph ("Dear ...") — the template renders the salutation.
+- Scope inflation: testing described as securing/owning, or junior evidence described as deep,
+  extensive, high-stakes, proven, or significant without those words and scope in resume_draft.
+- Invented project outcomes such as improved accuracy/performance or enhanced user experience when
+  resume_draft only says the candidate built or integrated something.
+- A target job title substituted for the candidate's actual historical title, or a real project
+  presented as a different activity (for example, LLM use presented as LLM security testing).
 
 ## Automatic score cap at 4, regardless of other quality
 - Any sentence naming a certification, credential, tool, methodology, or years-of-experience figure
@@ -229,5 +247,5 @@ PARSER_SECTIONS = (
     "closing_paragraph",
 )
 
-# No longer includes a reserved gap-paragraph slot — all body paragraphs are evidence.
-DEFAULT_BODY_PARAGRAPHS = 3
+# Two evidence paragraphs produce a focused four-paragraph business letter by default.
+DEFAULT_BODY_PARAGRAPHS = 2
