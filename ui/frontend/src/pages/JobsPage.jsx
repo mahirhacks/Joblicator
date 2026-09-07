@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useToast } from "../components/Toast.jsx";
 import ResizableSidebar from "../components/ResizableSidebar.jsx";
@@ -22,17 +22,6 @@ function draftFromJob(data) {
     url: data.url || "",
     about: data.about || "",
     description: data.description || "",
-  };
-}
-
-function parseJobFromText(text) {
-  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-  const urlMatch = text.match(/https?:\/\/[^\s]+/i);
-  return {
-    url: urlMatch ? urlMatch[0] : "",
-    title: lines[0] || "",
-    description: text,
-    about: lines.slice(0, 3).join(" "),
   };
 }
 
@@ -95,18 +84,8 @@ export default function JobsPage() {
   const { showToast } = useToast();
   const [jobs, setJobs] = useState([]);
   const [selectedSlug, setSelectedSlug] = useState(null);
-  const [messages, setMessages] = useState([
-    {
-      role: "assistant",
-      content:
-        "Paste a job URL and I'll try to scrape it, or drop the full job description below. Then review the form and save.",
-    },
-  ]);
-  const [input, setInput] = useState("");
   const [draft, setDraft] = useState(EMPTY_JOB);
-  const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const chatEnd = useRef(null);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -121,10 +100,6 @@ export default function JobsPage() {
     loadJobs();
   }, [loadJobs]);
 
-  useEffect(() => {
-    chatEnd.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
   async function loadJobDraft(slug, listedJob) {
     if (listedJob) {
       setDraft(draftFromJob(listedJob));
@@ -136,7 +111,6 @@ export default function JobsPage() {
 
   async function selectJob(slug) {
     setSelectedSlug(slug);
-    setEditing(true);
     try {
       const listed = jobs.find((job) => job.slug === slug);
       await loadJobDraft(slug, listed);
@@ -145,56 +119,13 @@ export default function JobsPage() {
     }
   }
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || busy) return;
-
-    setMessages((m) => [...m, { role: "user", content: text }]);
-    setInput("");
-    setBusy(true);
-
-    try {
-      const isUrl = /^https?:\/\//i.test(text) || text.includes("linkedin.com") || text.includes("jobs.");
-
-      if (isUrl) {
-        const scraped = await api.scrapeUrl(text);
-        setDraft((d) => ({
-          ...d,
-          url: scraped.url,
-          title: d.title || scraped.title || "",
-          about: scraped.about || d.about,
-          description: scraped.description || d.description,
-        }));
-        setMessages((m) => [
-          ...m,
-          {
-            role: "assistant",
-            content: "Fetched the posting. Set company and title, then save.",
-          },
-        ]);
-        setEditing(true);
-      } else {
-        const parsed = parseJobFromText(text);
-        setDraft((d) => ({ ...d, ...parsed, description: text }));
-        setMessages((m) => [
-          ...m,
-          {
-            role: "assistant",
-            content: "Got the description. Fill in company and title, then save.",
-          },
-        ]);
-        setEditing(true);
-      }
-    } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", content: `Error: ${e.message}` }]);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function saveJob() {
     if (!draft.company.trim() || !draft.title.trim()) {
       showToast("Company and title are required", "error");
+      return;
+    }
+    if (!draft.about.trim() && !draft.description.trim()) {
+      showToast("About or description is required", "error");
       return;
     }
     setBusy(true);
@@ -214,7 +145,6 @@ export default function JobsPage() {
       if (savedSlug) {
         await loadJobDraft(savedSlug);
       }
-      setEditing(true);
     } catch (e) {
       showToast(e.message, "error");
     } finally {
@@ -228,7 +158,6 @@ export default function JobsPage() {
       await api.deleteJob(selectedSlug);
       setSelectedSlug(null);
       setDraft(EMPTY_JOB);
-      setEditing(false);
       await loadJobs();
       showToast("Job deleted");
     } catch (e) {
@@ -239,74 +168,31 @@ export default function JobsPage() {
   function newJob() {
     setSelectedSlug(null);
     setDraft(EMPTY_JOB);
-    setEditing(true);
   }
 
   return (
-    <div className="profile-page jobs-page">
+    <div className="profile-page split-panel-page jobs-page">
       <div className="profile-layout">
         <main className="profile-main jobs-main">
           <div className="profile-main-inner jobs-main-inner">
-            {editing ? (
-              <>
-                <div className="profile-section-head">
-                  <div>
-                    <h1>{selectedSlug ? "Edit job" : "New job"}</h1>
-                    <p className="page-lead">
-                      {selectedSlug ? "Update role details before generating documents." : "Add a role to start tailoring your application."}
-                    </p>
-                  </div>
-                  {selectedSlug && (
-                    <button type="button" className="md-text-btn danger" onClick={deleteJob}>
-                      Delete job
-                    </button>
-                  )}
-                </div>
-                <div className="profile-form-surface">
-                  <JobForm draft={draft} onChange={setDraft} />
-                </div>
-              </>
-            ) : (
-              <div className="jobs-welcome">
-                <h1>Jobs</h1>
+            <div className="profile-section-head">
+              <div>
+                <h1>{selectedSlug ? "Edit job" : "New job"}</h1>
                 <p className="page-lead">
-                  Paste a job URL or description in the chat below, or select a saved role from the sidebar.
+                  {selectedSlug
+                    ? "Update role details before generating documents."
+                    : "Enter the company, title, location, and posting details, then save."}
                 </p>
               </div>
-            )}
-
-            <section className="jobs-chat" aria-label="Job intake chat">
-              <div className="jobs-chat-messages">
-                {messages.map((msg, i) => (
-                  <div key={i} className={`jobs-chat-bubble ${msg.role}`}>
-                    <span className="jobs-chat-label">{msg.role === "user" ? "You" : "Joblication"}</span>
-                    <p>{msg.content}</p>
-                  </div>
-                ))}
-                <div ref={chatEnd} />
-              </div>
-              <div className="jobs-chat-composer">
-                <div className="jobs-chat-input-wrap">
-                  <TextField
-                    id="job_intake"
-                    label="Paste URL or job description"
-                    value={input}
-                    onChange={setInput}
-                    multiline
-                    rows={3}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSend();
-                      }
-                    }}
-                  />
-                </div>
-                <button type="button" className="md-filled-btn jobs-send-btn" onClick={handleSend} disabled={busy}>
-                  {busy ? "…" : "Send"}
+              {selectedSlug && (
+                <button type="button" className="md-text-btn danger" onClick={deleteJob}>
+                  Delete job
                 </button>
-              </div>
-            </section>
+              )}
+            </div>
+            <div className="profile-form-surface">
+              <JobForm draft={draft} onChange={setDraft} />
+            </div>
           </div>
         </main>
 
@@ -337,7 +223,7 @@ export default function JobsPage() {
               type="button"
               className="md-filled-btn"
               onClick={saveJob}
-              disabled={busy || !editing}
+              disabled={busy}
             >
               {busy ? "Saving…" : "Save job"}
             </button>

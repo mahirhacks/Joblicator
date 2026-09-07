@@ -1,8 +1,8 @@
 """
 Deterministic ATS keyword coverage report — no LLM.
 
-Compares stage_1 resume keywords (originals + ATS variants) against the final
-rendered CV and cover letter text, and reports which keyword groups landed.
+Compares saved CV skills (plus the job title) against the final rendered CV
+and cover letter text, and reports which keyword groups landed.
 A keyword group counts as covered when the original or any of its variants
 appears in the document with word boundaries.
 """
@@ -92,6 +92,33 @@ def _group_dedupe_key(group: list[str]) -> str:
     if "osint" in terms or "open source intelligence" in terms or "open-source intelligence" in terms:
         return "osint"
     return group[0].casefold() if group else ""
+
+
+def keyword_groups_from_cv(resume: dict[str, Any], job_title: str = "") -> list[list[str]]:
+    """Turn saved CV skills and the job title into ATS keyword groups."""
+    groups: list[list[str]] = []
+    seen: set[str] = set()
+
+    def _add(term: str) -> None:
+        text = str(term or "").strip()
+        if not text or _PLACEHOLDER_KEYWORD_RE.match(text):
+            return
+        key = text.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        groups.append([text])
+
+    _add(job_title or str(resume.get("role_title", "")).strip())
+    skills = resume.get("skills")
+    if isinstance(skills, dict):
+        for _domain, entries in skills.items():
+            if isinstance(entries, list):
+                for skill in entries:
+                    _add(skill)
+            else:
+                _add(entries)
+    return groups
 
 
 def keyword_groups_from_stage1(
@@ -254,13 +281,15 @@ def _coverage(groups: list[list[str]], text: str) -> dict[str, Any]:
 
 
 def build_ats_report(
-    stage1_entry: dict[str, Any],
+    resume: dict[str, Any],
     config: dict[str, Any],
     cv_text: str,
     letter_text: str,
     candidate_text: str = "",
+    job_title: str = "",
 ) -> dict[str, Any]:
-    all_groups = keyword_groups_from_stage1(stage1_entry, config)
+    title = str(job_title or resume.get("role_title", "")).strip()
+    all_groups = keyword_groups_from_cv(resume, title)
     groups = all_groups
     excluded: list[str] = []
     if candidate_text.strip():
@@ -273,7 +302,7 @@ def build_ats_report(
                 excluded.append(group[0])
     combined = f"{cv_text}\n{letter_text}"
     return {
-        "job_title": str(stage1_entry.get("title", "")).strip(),
+        "job_title": title,
         "job_keyword_groups": len(all_groups),
         "eligible_keyword_groups": len(groups),
         "excluded_unsupported": excluded,

@@ -13,6 +13,7 @@ if str(DYNAMIC) not in sys.path:
 from batch_resilience import (  # noqa: E402
     estimate_profile_fit,
     is_buildable,
+    is_configuration_error,
     payload_status,
     process_with_resilience,
 )
@@ -99,7 +100,7 @@ class BatchResilienceTests(unittest.TestCase):
             return draft(fit=8, quality=5)
 
         result = process_with_resilience(
-            config(),
+            config(retry_on_low_quality=True),
             stage="stage_2",
             app_key="application_5",
             title="AI Engineer",
@@ -107,6 +108,26 @@ class BatchResilienceTests(unittest.TestCase):
         )
 
         self.assertEqual(calls, 3)
+        self.assertEqual(result["_generation"]["status"], "accepted_after_retries")
+        self.assertTrue(is_buildable(result))
+
+    def test_low_quality_does_not_rerun_full_generation_by_default(self) -> None:
+        calls = 0
+
+        def generate():
+            nonlocal calls
+            calls += 1
+            return draft(fit=8, quality=5)
+
+        result = process_with_resilience(
+            config(),
+            stage="stage_2",
+            app_key="application_5b",
+            title="AI Engineer",
+            generate=generate,
+        )
+
+        self.assertEqual(calls, 1)
         self.assertEqual(result["_generation"]["status"], "accepted_after_retries")
         self.assertTrue(is_buildable(result))
 
@@ -167,6 +188,30 @@ class BatchResilienceTests(unittest.TestCase):
         self.assertIsNotNone(score)
         self.assertGreaterEqual(score, 5)
         self.assertLessEqual(score, 7)
+
+
+    def test_missing_api_key_fails_once_without_reusing_another_job(self) -> None:
+        calls = 0
+
+        def generate():
+            nonlocal calls
+            calls += 1
+            raise ValueError("OpenRouter API key is required. Add it under Settings > AI provider.")
+
+        previous = draft()
+        previous["source_slug"] = "old_job"
+        result = process_with_resilience(
+            config(),
+            stage="stage_2",
+            app_key="application_1",
+            title="New role",
+            generate=generate,
+            previous=previous,
+        )
+        self.assertEqual(calls, 1)
+        self.assertEqual(result["_generation"]["status"], "failed")
+        self.assertIn("API key is required", result["_generation"]["errors"][0])
+        self.assertTrue(is_configuration_error(result["_generation"]["errors"][0]))
 
 
 if __name__ == "__main__":

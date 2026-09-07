@@ -52,6 +52,32 @@ class PdfRendererTests(unittest.TestCase):
             "Junior Penetration Tester at APU",
         )
 
+    def test_cv_context_preserves_review_editor_record_order(self) -> None:
+        context = build_cv_context(
+            {},
+            {
+                "certifications": {
+                    "certification 1": {"name": "First"},
+                    "certification 6": {"name": "Moved second"},
+                    "certification 2": {"name": "Third"},
+                },
+                "projects": {
+                    "project 1": {"title": "First project"},
+                    "project 5": {"title": "Moved project"},
+                    "project 2": {"title": "Last project"},
+                },
+            },
+        )
+
+        self.assertEqual(
+            [item["title"] for item in context["certifications"]],
+            ["First", "Moved second", "Third"],
+        )
+        self.assertEqual(
+            [item["title"] for item in context["projects"]],
+            ["First project", "Moved project", "Last project"],
+        )
+
     def test_rendered_template_normalizes_unicode_dashes_for_pdf_extraction(self) -> None:
         html = renderer.render_html(
             "templates/cv/professional.html.j2",

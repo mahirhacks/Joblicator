@@ -25,6 +25,15 @@ export function IconApplications() {
   );
 }
 
+export function IconGeneralCv() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M5 2.75h6l4 4V17.25H5z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M11 2.75v4h4M7.5 10h5M7.5 13h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IconTemplates() {
   return (
     <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">

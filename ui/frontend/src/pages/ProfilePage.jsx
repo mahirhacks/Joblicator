@@ -10,6 +10,19 @@ import {
 import ResizableSidebar from "../components/ResizableSidebar.jsx";
 
 const KNOWN_SECTIONS = new Set(SECTION_ORDER);
+const EMPTY_PROFILE = {
+  contact: {},
+  summary: "",
+  titles: {},
+  experience: {},
+  education: {},
+  skills: {},
+  projects: {},
+  certifications: {},
+  achievements: {},
+  languages: {},
+  interests: {},
+};
 
 function sortSectionKeys(keys) {
   const ordered = SECTION_ORDER.filter((k) => keys.includes(k));
@@ -29,9 +42,10 @@ export default function ProfilePage() {
     setLoading(true);
     try {
       const data = await api.getProfile();
-      const p = data.profile || {};
+      const storedProfile = data.profile || {};
+      const p = { ...EMPTY_PROFILE, ...storedProfile };
       setProfile(p);
-      setCustomSections(Object.keys(p).filter((k) => !KNOWN_SECTIONS.has(k)));
+      setCustomSections(Object.keys(storedProfile).filter((k) => !KNOWN_SECTIONS.has(k)));
     } catch (e) {
       showToast(e.message, "error");
     } finally {
@@ -45,8 +59,7 @@ export default function ProfilePage() {
 
   const sectionKeys = useMemo(() => {
     const fromProfile = profile ? Object.keys(profile) : [];
-    const merged = sortSectionKeys([...new Set([...SECTION_ORDER, ...fromProfile, ...customSections])]);
-    return merged.filter((k) => profile && k in profile);
+    return sortSectionKeys([...new Set([...SECTION_ORDER, ...fromProfile, ...customSections])]);
   }, [profile, customSections]);
 
   function updateSection(key, value) {
@@ -97,7 +110,7 @@ export default function ProfilePage() {
   const isCustom = !KNOWN_SECTIONS.has(activeSection);
 
   return (
-    <div className="profile-page">
+    <div className="profile-page split-panel-page profile-workspace-page">
       <div className="profile-layout">
         <main className="profile-main">
           <div className="profile-main-inner">

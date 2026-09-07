@@ -66,12 +66,12 @@ def _dedupe_preserve_order(items: list[str]) -> list[str]:
     return ordered
 
 
-def _sort_dict_items(data: Any) -> list[dict[str, Any]]:
+def _ordered_dict_items(data: Any) -> list[dict[str, Any]]:
+    """Preserve the explicit order saved by the Review editor."""
     if not isinstance(data, dict):
         return []
     items: list[dict[str, Any]] = []
-    for key in sorted(data.keys()):
-        value = data[key]
+    for value in data.values():
         if isinstance(value, dict):
             items.append(dict(value))
     return items
@@ -149,7 +149,7 @@ def _contact_block(header: dict[str, Any]) -> dict[str, str]:
 def _languages_inline(header: dict[str, Any]) -> str:
     languages = header.get("languages", {})
     parts: list[str] = []
-    for item in _sort_dict_items(languages):
+    for item in _ordered_dict_items(languages):
         name = str(item.get("name", "")).strip()
         level = str(item.get("level", "")).strip()
         if not name:
@@ -234,7 +234,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
     )
 
     degree_parts: list[dict[str, str]] = []
-    for item in _sort_dict_items(header.get("education", {})):
+    for item in _ordered_dict_items(header.get("education", {})):
         degree_line = _degree_line(item)
         lead, _, rest = degree_line.partition(" ")
         degree_parts.append(
@@ -252,7 +252,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
     education = degree_parts
 
     work_experience: list[dict[str, Any]] = []
-    for item in _sort_dict_items(application.get("work_experience", {})):
+    for item in _ordered_dict_items(application.get("work_experience", {})):
         points = item.get("points", [])
         if not isinstance(points, list):
             points = []
@@ -271,7 +271,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
         )
 
     projects: list[dict[str, Any]] = []
-    for item in _sort_dict_items(application.get("projects", {})):
+    for item in _ordered_dict_items(application.get("projects", {})):
         projects.append(
             {
                 "title": str(item.get("title", "")).strip(),
@@ -281,7 +281,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
         )
 
     volunteer: list[dict[str, Any]] = []
-    for item in _sort_dict_items(application.get("volunteer_experience", {})):
+    for item in _ordered_dict_items(application.get("volunteer_experience", {})):
         points = item.get("points", [])
         description = str(item.get("description", "")).strip()
         if isinstance(points, list) and points:
@@ -299,7 +299,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
         )
 
     certifications: list[dict[str, Any]] = []
-    for item in _sort_dict_items(application.get("certifications", {})):
+    for item in _ordered_dict_items(application.get("certifications", {})):
         name = str(item.get("name", "")).strip()
         description = str(item.get("description", "")).strip()
         issuer_field = str(item.get("issuer", "")).strip()
@@ -313,7 +313,7 @@ def build_cv_context(header: dict[str, Any], application: dict[str, Any]) -> dic
         )
 
     achievements: list[dict[str, Any]] = []
-    for item in _sort_dict_items(application.get("achievements", {})):
+    for item in _ordered_dict_items(application.get("achievements", {})):
         name = str(item.get("name", "")).strip()
         if not name:
             continue

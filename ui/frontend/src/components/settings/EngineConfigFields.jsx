@@ -75,7 +75,7 @@ function ConfigField({ field, config, onChange }) {
   );
 }
 
-export default function EngineConfigFields({ config, onChange }) {
+export default function EngineConfigFields({ config, onChange, sectionExtras }) {
   return (
     <div className="settings-form">
       {ENGINE_CONFIG_SECTIONS.map((section) => (
@@ -91,6 +91,7 @@ export default function EngineConfigFields({ config, onChange }) {
               </div>
             ))}
           </div>
+          {sectionExtras?.[section.id] || null}
         </section>
       ))}
     </div>

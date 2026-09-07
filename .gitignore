@@ -1,6 +1,7 @@
 # Local user/application data
 applications/local_*.json
 applications/application_meta.json
+applications/output_manifest.json
 settings/local_*.json
 settings/custom_templates.json
 *.local.json
@@ -67,6 +68,14 @@ ui/frontend/.vite/
 ui/frontend/assets/
 ui/frontend/index.html
 
+# Electron/PyInstaller desktop bundles
+desktop/python-dist/
+desktop/.pyinstaller-work/
+desktop/pyinstaller-build.*.log
+desktop/electron-builder.*.log
+desktop/smoke-workspace-*/
+release/
+
 # Local databases and caches
 *.db
 *.db-journal
@@ -78,6 +87,7 @@ ui/frontend/index.html
 .idea/
 .cursor/
 .codex/
+.freebuff/
 *.code-workspace
 
 # OS metadata
@@ -89,6 +99,7 @@ ehthumbs.db
 Desktop.ini
 
 # Temporary and scratch files
+tmp/
 *.tmp
 *.temp
 *.bak

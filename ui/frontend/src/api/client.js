@@ -14,6 +14,7 @@ export const api = {
   config: () => request("/api/config"),
 
   getEngineConfig: () => request("/api/engine-config"),
+  listOpenRouterModels: () => request("/api/providers/openrouter/models"),
   saveEngineConfig: (config) =>
     request("/api/engine-config", {
       method: "PUT",
@@ -27,6 +28,20 @@ export const api = {
       method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify({ profile }),
+    }),
+
+  getGeneralCv: () => request("/api/general-cv"),
+  recommendGeneralCv: () =>
+    request("/api/general-cv/recommend", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: "{}",
+    }),
+  generateGeneralCv: (payload) =>
+    request("/api/general-cv/generate", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
     }),
 
   listJobs: () => request("/api/applications"),
@@ -45,17 +60,11 @@ export const api = {
     }),
   deleteJob: (slug) =>
     request(`/api/applications/${encodeURIComponent(slug)}`, { method: "DELETE" }),
-  scrapeUrl: (url) =>
-    request("/api/applications/scrape", {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ url }),
-    }),
 
   listApplications: () => request("/api/applications/view"),
   listOutputs: () => request("/api/outputs"),
-  fileUrl: (folder, filename) =>
-    `/api/files/${encodeURIComponent(folder)}/${encodeURIComponent(filename)}`,
+  fileUrl: (folder, filename, { download = false } = {}) =>
+    `/api/files/${encodeURIComponent(folder)}/${encodeURIComponent(filename)}${download ? "?download=1" : ""}`,
 
   getReview: (slug) => request(`/api/review/${encodeURIComponent(slug)}`),
   saveReview: (slug, payload) =>
@@ -87,9 +96,7 @@ export const api = {
     }),
 
   generateStatus: () => request("/api/generate/status"),
-  generateLog: (offset = 0) =>
-    request(`/api/generate/log?offset=${encodeURIComponent(String(offset))}`),
-  startGenerate: async ({ fromStage = "stage_1", onlyStage = null, slugs = null, buildTargets = "both" } = {}) => {
+  startGenerate: async ({ fromStage = "stage_2", onlyStage = null, slugs = null, buildTargets = "both" } = {}) => {
     const response = await fetch("/api/generate", {
       method: "POST",
       headers: JSON_HEADERS,

@@ -3,6 +3,7 @@ import { api } from "../api/client.js";
 import { useToast } from "../components/Toast.jsx";
 import PageLoading from "../components/PageLoading.jsx";
 import EngineConfigFields from "../components/settings/EngineConfigFields.jsx";
+import ProviderSettings from "../components/settings/ProviderSettings.jsx";
 import { useTheme } from "../theme/ThemeContext.jsx";
 
 function configsEqual(a, b) {
@@ -15,6 +16,7 @@ export default function SettingsPage() {
   const [config, setConfig] = useState(null);
   const [savedConfig, setSavedConfig] = useState(null);
   const [configPath, setConfigPath] = useState("");
+  const [outputsDir, setOutputsDir] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -26,6 +28,7 @@ export default function SettingsPage() {
       setConfig(structuredClone(next));
       setSavedConfig(structuredClone(next));
       setConfigPath(data.path || "");
+      setOutputsDir(data.outputs_dir || "");
     } catch (e) {
       showToast(e.message, "error");
     } finally {
@@ -48,6 +51,7 @@ export default function SettingsPage() {
       setConfig(structuredClone(next));
       setSavedConfig(structuredClone(next));
       setConfigPath(data.path || configPath);
+      setOutputsDir(data.outputs_dir || outputsDir);
       showToast("Settings saved");
     } catch (e) {
       showToast(e.message, "error");
@@ -77,7 +81,7 @@ export default function SettingsPage() {
           <div>
             <h1>Settings</h1>
             <p className="page-lead">
-              Edit the engine configuration used for generation, stages, and model options.
+              Choose the look of the app, where generated files are saved, and which AI provider to use.
             </p>
             {configPath && (
               <p className="settings-config-path">
@@ -121,9 +125,18 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        <p className="settings-hint muted">Changes apply to the next pipeline run.</p>
-
-        <EngineConfigFields config={config} onChange={setConfig} />
+        <EngineConfigFields
+          config={config}
+          onChange={setConfig}
+          sectionExtras={{
+            export: outputsDir ? (
+              <p className="settings-resolved-path">
+                Currently writing to <code>{outputsDir}</code>
+              </p>
+            ) : null,
+          }}
+        />
+        <ProviderSettings config={config} onChange={setConfig} />
       </div>
     </div>
   );

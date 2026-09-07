@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from joblication_runtime import data_path
+
 
 class ParserGateError(RuntimeError):
     """Raised when parser verification fails and fail_on_unresolved is enabled."""
@@ -16,7 +18,7 @@ PipelineHaltError = ParserGateError
 
 
 def default_failure_report_path() -> Path:
-    return Path(__file__).resolve().parent / "data" / "pipeline_failure.json"
+    return data_path("engine", "dynamic_engine", "data", "pipeline_failure.json")
 
 
 def parser_review_failures(parser_review: dict[str, Any] | None) -> dict[str, list[str]]:

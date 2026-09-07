@@ -386,3 +386,8 @@ PLAIN_TEXT_REPLY = (
     "Reply in plain text only, using exactly the output format and all writing rules "
     "in the system prompt. No JSON, no markdown code fences, no commentary, no preamble."
 )
+
+JSON_REPLY = (
+    "Reply with a single JSON object only. No markdown fences, no commentary, no preamble. "
+    "Use double quotes. Omit unknown optional fields rather than inventing values."
+)

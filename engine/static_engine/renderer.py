@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from joblication_runtime import resource_path
 
 ENGINE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ENGINE_DIR.parent.parent
-TEMPLATES_DIR = PROJECT_ROOT / "templates"
+TEMPLATES_DIR = resource_path("templates")
 
 _DASH_TRANSLATION = str.maketrans(
     {

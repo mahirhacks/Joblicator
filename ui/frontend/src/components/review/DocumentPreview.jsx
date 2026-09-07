@@ -103,8 +103,8 @@ function IdentityHeader({ identity, roleTitle, onSelect, component }) {
         <p className="document-role">{roleTitle || "Target role"}</p>
       </div>
       <div className="document-contact">
-        {contact.map((item) => <span key={item}>{item}</span>)}
-        {links.map((item) => <span key={item}>{item}</span>)}
+        {contact.map((item) => <p key={item}>{item}</p>)}
+        {links.map((item) => <p key={item}>{item}</p>)}
       </div>
     </header>
   );
@@ -124,7 +124,7 @@ function CvPreview({ data, identity, activeSection, onSelect, layout }) {
   function renderComponent(component) {
     const shared = { activeSection, onSelect, component };
     if (component.id === "contact") return <IdentityHeader key={component.id} identity={identity} roleTitle={data?.role_title} onSelect={onSelect} component={component} />;
-    if (component.id === "summary") return <Section key={component.id} id="summary" title="Professional Summary" {...shared}><p>{data?.executive_summary || "Add a concise, role-specific professional summary."}</p></Section>;
+    if (component.id === "summary") return <Section key={component.id} id="summary" title="Professional Summary" {...shared}><p className="document-summary">{data?.executive_summary || "Add a concise, role-specific professional summary."}</p></Section>;
     if (component.id === "skills") return <Section key={component.id} id="skills" title="Core Skills" {...shared}>
         <div className="document-skill-list">
           {skills.map(([category, items]) => (
@@ -138,15 +138,13 @@ function CvPreview({ data, identity, activeSection, onSelect, layout }) {
     if (component.id === "experience") return <Section key={component.id} id="experience" title="Professional Experience" {...shared}>
         {experience.map((entry, index) => (
           <div className="document-entry" key={`${entry?.company || "experience"}-${index}`}>
-            <div className="document-entry-heading">
-              <div>
-                <h3>{entry?.title || "Position title"}</h3>
-                <p className="document-subtitle">{entry?.company || "Company"}</p>
-              </div>
+            <p className="document-entry-heading">
+              <strong>{entry?.title || "Position title"}</strong>
               <time>{dateRange(entry?.start_date, entry?.end_date)}</time>
-            </div>
+            </p>
+            <p className="document-subtitle">{entry?.company || "Company"}</p>
             {!!valuesOf(entry?.points).length && (
-              <ul>
+              <ul className="document-bullets">
                 {valuesOf(entry.points).map((point, pointIndex) => <li key={`${pointIndex}-${point}`}>{point}</li>)}
               </ul>
             )}
@@ -157,11 +155,11 @@ function CvPreview({ data, identity, activeSection, onSelect, layout }) {
     if (component.id === "projects") return <Section key={component.id} id="projects" title="Selected Projects" {...shared}>
         {projects.map((project, index) => (
           <div className="document-entry" key={`${project?.title || "project"}-${index}`}>
-            <div className="document-entry-heading">
-              <h3>{project?.title || "Project title"}</h3>
+            <p className="document-entry-heading">
+              <strong>{project?.title || "Project title"}</strong>
               <time>{dateRange(project?.start_date, project?.end_date)}</time>
-            </div>
-            <p>{project?.description || "Describe the problem, your contribution, and the outcome."}</p>
+            </p>
+            <p className="document-entry-body">{project?.description || "Describe the problem, your contribution, and the outcome."}</p>
           </div>
         ))}
         {!projects.length && <p className="document-placeholder">Add two or three relevant projects.</p>}
@@ -169,57 +167,55 @@ function CvPreview({ data, identity, activeSection, onSelect, layout }) {
     if (component.id === "volunteer" && volunteer.length) return <Section key={component.id} id="volunteer" title="Volunteer Experience" {...shared}>
           {volunteer.map((entry, index) => (
             <div className="document-entry" key={`${entry?.company || entry?.organization || "volunteer"}-${index}`}>
-              <div className="document-entry-heading">
-                <div>
-                  <h3>{entry?.title || "Volunteer role"}</h3>
-                  <p className="document-subtitle">{entry?.company || entry?.organization || "Organization"}</p>
-                </div>
+              <p className="document-entry-heading">
+                <strong>{entry?.title || "Volunteer role"}</strong>
                 <time>{dateRange(entry?.start_date, entry?.end_date)}</time>
-              </div>
+              </p>
+              <p className="document-subtitle">{entry?.company || entry?.organization || "Organization"}</p>
               {!!valuesOf(entry?.points).length && (
-                <ul>{valuesOf(entry.points).map((point, pointIndex) => <li key={`${pointIndex}-${point}`}>{point}</li>)}</ul>
+                <ul className="document-bullets">{valuesOf(entry.points).map((point, pointIndex) => <li key={`${pointIndex}-${point}`}>{point}</li>)}</ul>
               )}
-              {!valuesOf(entry?.points).length && entry?.description && <p>{entry.description}</p>}
+              {!valuesOf(entry?.points).length && entry?.description && <p className="document-entry-body">{entry.description}</p>}
             </div>
           ))}
         </Section>;
     if (component.id === "education" && education.length) return <Section key={component.id} id="education" title="Education" {...shared}>
           {education.map((entry, index) => (
             <div className="document-entry" key={`${entry?.school || "education"}-${index}`}>
-              <div className="document-entry-heading">
-                <h3>{entry?.school || "Institution"}</h3>
+              <p className="document-entry-heading">
+                <strong>{entry?.school || "Institution"}</strong>
                 <time>{dateRange(entry?.start_date, entry?.end_date)}</time>
-              </div>
-              {educationDegree(entry) && <p>{educationDegree(entry)}</p>}
-              {(entry?.cgpa || entry?.gpa) && <p><strong>CGPA:</strong> {entry.cgpa || entry.gpa}</p>}
-              {entry?.courses && <p><strong>Relevant Coursework:</strong> {entry.courses}</p>}
+              </p>
+              {educationDegree(entry) && <p className="document-entry-body">{educationDegree(entry)}</p>}
+              {(entry?.cgpa || entry?.gpa) && <p className="document-education-detail"><strong>CGPA:</strong> {entry.cgpa || entry.gpa}</p>}
+              {entry?.courses && <p className="document-education-detail"><strong>Relevant Coursework:</strong> {entry.courses}</p>}
             </div>
           ))}
         </Section>;
     if (component.id === "certifications" && certifications.length) return <Section key={component.id} id="certifications" title="Certifications" {...shared}>
           {certifications.map((item, index) => (
-            <div className="document-compact-entry" key={`${item?.name || "certification"}-${index}`}>
-              <div>
+            <p className="document-compact-entry" key={`${item?.name || "certification"}-${index}`}>
+              <span>
                 <strong>{item?.name || "Certification"}</strong>
                 {item?.issuer && <span> - {item.issuer}</span>}
-              </div>
+              </span>
               <time>{formatDate(item?.date)}</time>
-            </div>
+            </p>
           ))}
         </Section>;
     if (component.id === "achievements" && achievements.length) return <Section key={component.id} id="achievements" title="Achievements" {...shared}>
           {achievements.map((item, index) => (
             <div className="document-entry" key={`${item?.name || "achievement"}-${index}`}>
-              <div className="document-entry-heading">
-                <h3>{item?.name || "Achievement"}</h3>
+              <p className="document-entry-heading">
+                <strong>{item?.name || "Achievement"}</strong>
                 <time>{formatDate(item?.date)}</time>
-              </div>
-              {item?.description && <p>{item.description}</p>}
+              </p>
+              {item?.description && <p className="document-entry-body">{item.description}</p>}
             </div>
           ))}
         </Section>;
     if (component.id === "additional" && languages) return <Section key={component.id} id="additional" title="Additional Information" {...shared}>
-          <p><strong>Languages:</strong> {languages}</p>
+          <p className="document-additional-line"><strong>Languages:</strong> {languages}</p>
         </Section>;
     return null;
   }

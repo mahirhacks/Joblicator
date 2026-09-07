@@ -16,6 +16,11 @@ SUCCESS_STATUSES = frozenset({
 })
 
 
+def is_configuration_error(message: str) -> bool:
+    text = str(message or "").lower()
+    return "api key is required" in text or "model is required" in text
+
+
 def resilience_settings(config: dict[str, Any]) -> dict[str, Any]:
     raw = config.get("batch_resilience", {})
     return {
@@ -27,6 +32,7 @@ def resilience_settings(config: dict[str, Any]) -> dict[str, Any]:
             1, min(10, int(raw.get("accept_low_quality_fit_at_most", 6)))
         ),
         "reuse_previous_success": bool(raw.get("reuse_previous_success", True)),
+        "retry_on_low_quality": bool(raw.get("retry_on_low_quality", False)),
     }
 
 
@@ -171,6 +177,7 @@ def failure_record(
     fit: int | None,
     errors: list[str],
     dependency: str | None = None,
+    source_slug: str | None = None,
 ) -> dict[str, Any]:
     reason = (
         f"Profile fit {fit}/10 is below the configured threshold."
@@ -179,8 +186,9 @@ def failure_record(
         if status == "skipped_dependency"
         else "Generation failed after all configured attempts."
     )
-    return {
+    record = {
         "role_title": title or app_key,
+        "source_slug": source_slug or "",
         "fit_review": {
             "fit_score": fit or 0,
             "fit_summary": reason,
@@ -199,6 +207,7 @@ def failure_record(
             "finished_at": datetime.now(UTC).isoformat(),
         },
     }
+    return record
 
 
 def process_with_resilience(
@@ -226,7 +235,8 @@ def process_with_resilience(
             min_target = int(config.get(stage, {}).get("verification", {}).get("min_quality", 7))
 
             if (
-                candidate_quality is not None
+                policy["retry_on_low_quality"]
+                and candidate_quality is not None
                 and candidate_quality < min_target
                 and candidate_fit is not None
                 and candidate_fit > policy["accept_low_quality_fit_at_most"]
@@ -269,6 +279,17 @@ def process_with_resilience(
             )
             if not policy["continue_on_error"]:
                 raise
+            if is_configuration_error(message):
+                return failure_record(
+                    stage=stage,
+                    app_key=app_key,
+                    title=title,
+                    status="failed",
+                    attempts=attempt,
+                    fit=fit_score(previous) or fallback_fit,
+                    errors=errors,
+                    source_slug=str((previous or {}).get("source_slug", "")),
+                )
 
     terminal_fit = fit_score(last_candidate) or fit_score(previous) or fallback_fit
     if last_candidate is not None:

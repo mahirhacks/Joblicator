@@ -4,21 +4,28 @@ Static engine — assemble stage_2 + stage_3 into PDF documents.
 Run from project root:
     python engine/static_engine/build.py
 
-Outputs CV and cover letter PDFs per application to the directory in
-settings/template.json (default: outputs/).
+Outputs CV and cover letter PDFs per application to the folder in
+Settings → Output (default: outputs/).
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from joblication_runtime import DATA_ROOT, RESOURCE_ROOT, data_path
+
+PROJECT_ROOT = DATA_ROOT
+if str(RESOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(RESOURCE_ROOT))
 
 from engine.template_contract import resolve_cv_template
 
@@ -40,7 +47,6 @@ from batch_resilience import generation_meta, is_buildable  # noqa: E402
 from loader import (  # noqa: E402
     list_application_keys,
     load_engine_config,
-    load_stage_1,
     load_stage_2,
     load_stage_3,
     load_template_settings,
@@ -51,22 +57,43 @@ from normalizer import build_cover_letter_context, build_cv_context  # noqa: E40
 from renderer import render_html, safe_filename_part, write_html, write_pdf  # noqa: E402
 from utils import build_targets, load_json, resolve_path, selected_slugs  # noqa: E402
 from verification import (  # noqa: E402
-    assert_application_parser_passed,
     assert_pipeline_not_failed,
     default_failure_report_path,
 )
 
-def _company_from_stage1(stage1_entry: dict[str, Any]) -> str:
-    context = stage1_entry.get("context", {})
-    summary = str(context.get("company_summary", "")) if isinstance(context, dict) else ""
-    lower = summary.lower().strip()
-    if " is " in lower:
-        candidate = summary[: lower.index(" is ")].strip()
-        if candidate.lower() not in {"the employer", "the company", "company", "employer"}:
-            return candidate
-    if summary and not lower.startswith(("the employer ", "the company ", "company ")):
-        return summary.split(".", 1)[0].strip()[:100]
-    slug = str(stage1_entry.get("source_slug", "")).strip()
+
+def _resolve_source_slug(
+    app_key: str,
+    resume_block: dict[str, Any],
+    letter_block: dict[str, Any],
+    apps: dict[str, Any],
+) -> str:
+    """Prefer saved source_slug; otherwise map application_N to the Nth job record."""
+    for block in (resume_block, letter_block):
+        if not isinstance(block, dict):
+            continue
+        slug = str(block.get("source_slug") or "").strip()
+        if slug:
+            return slug
+    try:
+        index = int(str(app_key).rsplit("_", 1)[-1])
+    except ValueError:
+        return ""
+    slugs = [slug for slug, record in apps.items() if isinstance(record, dict)]
+    if 1 <= index <= len(slugs):
+        return slugs[index - 1]
+    return ""
+
+
+def _company_from_record(record: dict[str, Any], slug: str, letter: dict[str, Any]) -> str:
+    generic = {"", "company", "the company", "employer", "the employer", "organization"}
+    for source in (letter, record):
+        if not isinstance(source, dict):
+            continue
+        for key in ("company_name", "company", "employer"):
+            value = str(source.get(key, "")).strip()
+            if value.lower() not in generic:
+                return value
     if slug:
         return " ".join(
             word.upper() if word.lower() in {"lgms", "ib", "ibm"} else word.title()
@@ -80,8 +107,9 @@ def _export_settings(template_settings: dict[str, Any]) -> dict[str, Any]:
 
 
 def _output_dir(template_settings: dict[str, Any]) -> Path:
-    rel = str(_export_settings(template_settings).get("output_dir", "outputs"))
-    return (PROJECT_ROOT / rel).resolve()
+    from utils import configured_export_dir, load_config  # noqa: E402
+
+    return configured_export_dir(load_config(), template_settings)
 
 
 def _build_filename_stem(
@@ -102,6 +130,35 @@ def _build_filename_stem(
     }
     stem = pattern.format(**values)
     return re.sub(r"_+", "_", stem).strip("_")
+
+
+def _record_output_folder(source_slug: str, app_key: str, outputs: dict[str, Path]) -> None:
+    """Persist an exact slug-to-folder association for UI previews and downloads."""
+    if not source_slug or not outputs:
+        return
+    built_file = next((path for path in outputs.values() if isinstance(path, Path)), None)
+    if built_file is None:
+        return
+
+    manifest_path = data_path("applications", "output_manifest.json")
+    manifest: dict[str, Any] = {}
+    if manifest_path.is_file():
+        try:
+            parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                manifest = parsed
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    manifest[source_slug] = {
+        "folder": built_file.parent.name,
+        "application": app_key,
+        "updated_at": datetime.now().astimezone().isoformat(),
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = manifest_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(manifest_path)
 
 
 def _formats(template_settings: dict[str, Any]) -> list[str]:
@@ -173,18 +230,24 @@ def run() -> list[dict[str, Any]]:
     template_settings = load_template_settings()
     profile_path = resolve_path(config, "profile", "json", "settings/local_profile.json")
     candidate_text = flatten_context_text(load_json(profile_path))
-    stage2 = load_stage_2(config)
-    stage3 = load_stage_3(config)
+    try:
+        stage2 = load_stage_2(config)
+    except (FileNotFoundError, ValueError):
+        stage2 = {}
+    try:
+        stage3 = load_stage_3(config)
+    except (FileNotFoundError, ValueError):
+        stage3 = {}
     targets = build_targets()
     try:
-        stage1 = load_stage_1(config)
+        apps = load_json(resolve_path(config, "applications", "json", "applications/local_applications.json"))
     except (FileNotFoundError, ValueError):
-        stage1 = {}
+        apps = {}
+    if not isinstance(apps, dict):
+        apps = {}
 
     failure_report = default_failure_report_path()
     if failure_report.is_file():
-        import json
-
         report = json.loads(failure_report.read_text(encoding="utf-8"))
         if report.get("pipeline_status") == "FAILED":
             stage = report.get("stage", "unknown stage")
@@ -194,73 +257,74 @@ def run() -> list[dict[str, Any]]:
                 f"See {failure_report} for details."
             )
 
-    if "cv" in targets and not stage2:
-        raise ValueError("stage_2.json is empty — run stage_2.py first")
-    if "letter" in targets and not stage3:
-        raise ValueError("stage_3.json is empty — run stage_3.py first")
+    if "cv" in targets and not list_application_keys(stage2):
+        raise ValueError("stage_2.json is empty — generate the CV first")
+    if "letter" in targets and not list_application_keys(stage3):
+        raise ValueError("stage_3.json is empty — generate the letter first")
 
-    assert_pipeline_not_failed(stage2, label="stage_2.json")
-    if "letter" in targets:
+    if stage2:
+        assert_pipeline_not_failed(stage2, label="stage_2.json")
+    if "letter" in targets and stage3:
         assert_pipeline_not_failed(stage3, label="stage_3.json")
+
+    keys: list[str] = []
+    if "cv" in targets:
+        keys.extend(list_application_keys(stage2))
+    if "letter" in targets:
+        keys.extend(list_application_keys(stage3))
+    ordered_keys: list[str] = []
+    for key in keys:
+        if key not in ordered_keys:
+            ordered_keys.append(key)
 
     results: list[dict[str, Any]] = []
     slug_filter = selected_slugs()
-    for app_key in list_application_keys(stage2):
-        stage1_entry = stage1.get(app_key)
-        if slug_filter is not None and isinstance(stage1_entry, dict):
-            source_slug = str(stage1_entry.get("source_slug", "")).strip()
-            if source_slug not in slug_filter:
-                continue
-        elif slug_filter is not None:
+    for app_key in ordered_keys:
+        resume_block = stage2.get(app_key) if isinstance(stage2.get(app_key), dict) else {}
+        letter_block = stage3.get(app_key) if isinstance(stage3.get(app_key), dict) else {}
+        source_slug = _resolve_source_slug(app_key, resume_block, letter_block, apps)
+        if slug_filter is not None and source_slug not in slug_filter:
             continue
 
-        header, resume = split_header_and_application(stage2, app_key)
-        app_targets = set(targets)
-        if "cv" in app_targets and not is_buildable(resume):
-            status = generation_meta(resume).get("status", "unavailable")
-            print(f"Warning: skipping {app_key} CV - stage 2 status is {status}", file=sys.stderr)
-            app_targets.discard("cv")
+        header: dict[str, Any] = {}
+        resume: dict[str, Any] = {}
         letter: dict[str, Any] = {}
+        if resume_block:
+            header, resume = split_header_and_application(stage2, app_key)
+        if letter_block:
+            letter_header, letter = split_header_and_application(stage3, app_key)
+            if not header:
+                header = letter_header
 
+        app_targets = set(targets)
+        if "cv" in app_targets:
+            if not resume:
+                app_targets.discard("cv")
+            elif not is_buildable(resume):
+                status = generation_meta(resume).get("status", "unavailable")
+                print(f"Warning: skipping {app_key} CV - stage 2 status is {status}", file=sys.stderr)
+                app_targets.discard("cv")
         if "letter" in app_targets:
-            if app_key not in stage3:
+            if not letter:
                 print(f"Warning: skipping {app_key} — missing in stage_3.json", file=sys.stderr)
-                continue
-            _, letter = split_header_and_application(stage3, app_key)
-            if not is_buildable(letter):
+                app_targets.discard("letter")
+            elif not is_buildable(letter):
                 status = generation_meta(letter).get("status", "unavailable")
                 print(f"Warning: skipping {app_key} letter - stage 3 status is {status}", file=sys.stderr)
                 app_targets.discard("letter")
-            else:
-                try:
-                    assert_application_parser_passed(app_key, letter, stage_label="Stage 3")
-                except RuntimeError as exc:
-                    print(f"Warning: skipping {app_key} letter - {exc}", file=sys.stderr)
-                    app_targets.discard("letter")
-
-        if "cv" in app_targets:
-            try:
-                assert_application_parser_passed(app_key, resume, stage_label="Stage 2")
-            except RuntimeError as exc:
-                print(f"Warning: skipping {app_key} CV - {exc}", file=sys.stderr)
-                app_targets.discard("cv")
 
         if not app_targets:
             print(f"Warning: no buildable documents for {app_key}; continuing batch", file=sys.stderr)
             continue
 
-        if not letter and isinstance(stage1_entry, dict):
+        record = apps.get(source_slug, {}) if isinstance(apps.get(source_slug), dict) else {}
+        if not letter:
             letter = {
-                "company_name": _company_from_stage1(stage1_entry),
-                "role_title": str(stage1_entry.get("title", app_key)).strip(),
+                "company_name": _company_from_record(record, source_slug, {}),
+                "role_title": str(resume.get("role_title") or record.get("title") or app_key).strip(),
             }
 
         try:
-            source_slug = (
-                str(stage1_entry.get("source_slug", "")).strip()
-                if isinstance(stage1_entry, dict)
-                else ""
-            )
             cv_contract = resolve_cv_template(PROJECT_ROOT, slug=source_slug)
             outputs = build_application_documents(
                 app_key,
@@ -275,17 +339,18 @@ def run() -> list[dict[str, Any]]:
             print(f"Warning: build failed for {app_key}: {exc}", file=sys.stderr)
             continue
 
-        if isinstance(stage1_entry, dict) and "cv" in app_targets:
+        if "cv" in app_targets and resume:
             cv_text = flatten_context_text(build_cv_context(header, resume))
             letter_text = ""
             if "letter" in app_targets and letter:
                 letter_text = flatten_context_text(build_cover_letter_context(header, letter))
             report = build_ats_report(
-                stage1_entry,
+                resume,
                 config,
                 cv_text,
                 letter_text,
                 candidate_text,
+                job_title=str(resume.get("role_title") or record.get("title") or "").strip(),
             )
             cv_html_path = outputs.get("cv_html")
             if cv_html_path is not None:
@@ -294,6 +359,8 @@ def run() -> list[dict[str, Any]]:
                 )
                 outputs["ats_report"] = write_ats_report(report, report_path)
             print(format_ats_summary(app_key, report), file=sys.stderr)
+
+        _record_output_folder(source_slug, app_key, outputs)
 
         results.append({"application": app_key, "outputs": outputs})
         built = outputs.get("cv_pdf") or outputs.get("cv_html") or outputs.get("cover_pdf") or outputs.get("cover_html")

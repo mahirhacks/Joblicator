@@ -1,38 +1,46 @@
 # Joblication
 
-Joblication is a local-first studio for creating tailored, ATS-friendly CVs and evidence-led cover letters. It stores a reusable candidate profile, captures job postings, runs a multi-stage Ollama pipeline, lets you refine both documents in a visual editor, and exports HTML/PDF files from your own machine.
+Joblication is a local-first desktop studio for creating tailored, ATS-friendly CVs and evidence-led cover letters. It stores a reusable candidate profile, captures job postings, runs a source-grounded multi-stage pipeline with Ollama or OpenRouter, lets you refine documents in a visual editor, and exports HTML/PDF files from your own machine.
 
-Your profile, applications, model requests, stage data, and generated documents stay local by default.
+Your profile, applications, stage data, and generated documents stay local by default. Model requests stay local with Ollama; choosing OpenRouter sends generation prompts to the selected cloud model.
 
 ## What it does
 
 | Area | Capabilities |
 |------|--------------|
 | **Profile** | Maintain contact details, experience, education, skills, projects, certifications, and custom sections in structured form |
-| **Jobs** | Add a role from a URL or pasted job description; keep title, company, location, and source text together |
-| **Applications** | Filter and select jobs, choose a per-job CV template, choose a pipeline starting point and output type, follow live progress, and inspect per-job outcomes |
+| **Jobs** | Enter company, title, location, about, and description by hand; keep role details together for generation |
+| **Applications** | Filter and select jobs, choose a per-job CV template, pick CV+Letter / CV only / Letter only, follow live progress, and inspect per-job outcomes |
+| **General CV** | Analyze the saved profile for its strongest supported job title and summary, then build an employer-neutral CV without a cover letter |
 | **ATS-focused CVs** | Tailor supported skills and experience to the posting, preserve source facts, keep bullets scannable, and write an ATS keyword-coverage report |
-| **Cover letters** | Generate role-specific, evidence-led prose with claim grounding, anti-template checks, gap-disclosure protection, and quality/parser verification |
+| **Cover letters** | Generate role-specific, evidence-led JSON (opening, body, closing) that templates place into a PDF; letter-only does not require a CV |
 | **Document studio** | Edit CV and cover-letter sections in a Figma/Adobe-inspired three-panel workspace with live preview, PDF preview, undo/redo, autosave, health checks, and export |
 | **CV templates** | Compose CVs from supported components, drag components into order, set exact 1px section gaps, and control padding, opacity, alignment, colors, and typography |
-| **Settings** | Configure Ollama, generation, quality gates, batch resilience, paths, and stage behavior without leaving the UI |
+| **Settings** | Choose light/dark theme, set the output folder for generated PDFs, and configure Ollama or OpenRouter |
 
 ## Pipeline
 
 ```text
-Profile + job postings
+Profile + job
         |
         v
-Stage 1: requirements, keyword groups, context, and profile fit
+CV writer: full tailored CV JSON (optional; skipped for letter-only)
         |
         v
-Stage 2: source-grounded ATS CV + quality/parser checks
+CV reviewer: {ok, issues} feedback JSON — no rewrite
         |
         v
-Stage 3: evidence-led cover letter + claim/quality/parser checks
+CV writer repair: at most two review rounds
         |
         v
-Static build: Jinja HTML + PDF + ATS coverage report
+Letter writer: opening / body / closing JSON (optional; skipped for CV-only)
+  (Both mode also passes the CV JSON as evidence)
+        |
+        v
+Letter reviewer + at most two repairs
+        |
+        v
+Static build: Jinja templates place JSON fields into HTML/PDF + ATS report
         |
         v
 Document studio: review, edit, save, and export
@@ -41,7 +49,7 @@ Document studio: review, edit, save, and export
 ```text
 ┌────────────────────────────────────────────────────────────────┐
 │  React UI (ui/frontend)          http://localhost:8080         │
-│  Profile · Jobs · Applications · Templates · Review · Settings │
+│  Profile · Jobs · Applications · General CV · Templates · Review │
 └──────────────────────────┬─────────────────────────────────────┘
                            │ REST API
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -57,10 +65,8 @@ Document studio: review, edit, save, and export
                   ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Dynamic engine (engine/dynamic_engine)                     │
-│  Stage 1 → keywords & context                               │
-│  Stage 2 → tailored resume JSON                             │
-│  Stage 3 → cover letter JSON                                │
-│  (Ollama LLM, verification loops)                           │
+│  CV JSON write/review  and/or  letter JSON write/review     │
+│  (Ollama or OpenRouter; max two review rounds per document) │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -69,7 +75,9 @@ Document studio: review, edit, save, and export
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The dynamic stages run as separate subprocesses to release model memory between stages and reduce shared-process drift during long runs.
+The dynamic stages still run as separate subprocesses. The configured model stays loaded across those stages so large local models are not unloaded and reloaded between CV and letter.
+
+Typical model-call budget is 2 per document on a clean run (write + review). Worst case is 5 (write, review, repair, review, repair). Invalid JSON still fails; a reviewer that never says `ok` still saves the last draft and builds PDFs.
 
 ### CV quality and ATS behavior
 
@@ -79,7 +87,7 @@ Stage 2 is designed to improve machine parsing without inventing experience:
 - Front-loads relevant language in short, scannable experience bullets.
 - Preserves historical employers, job titles, project purpose, and source-backed scope.
 - Rejects or repairs seniority inflation, unsupported outcomes, garbled phrases, and repurposed project claims.
-- Locks passing sections while regenerating only sections that still need work.
+- A reviewer returns `{ok, issues}` only; the writer resubmits the full JSON when issues remain.
 - Produces `<filename>_ats_report.json` beside each built CV with keyword-group coverage and unsupported-keyword information.
 - Uses a clean, single-column CV template with conventional headings and selectable text.
 - Uses the CV template selected for each application. Hidden components are not requested from the LLM, and the saved component order and pixel spacing drive both Live Draft and PDF output.
@@ -93,9 +101,9 @@ Stage 3 builds from the verified CV and candidate profile instead of writing a g
 - Uses a specific opening, two evidence paragraphs by default, and a value-focused closing.
 - Gives each body paragraph a distinct claim -> evidence -> employer tie-back structure.
 - Blocks generic openers, repetitive paragraph starts, keyword dumping, leaked salutations/sign-offs, and common template phrases.
-- Prevents unsupported scope inflation and checks important claims against the CV draft.
-- Keeps qualification gaps in review metadata instead of volunteering weaknesses in the letter.
-- Runs deterministic quality checks in addition to the LLM reviewer and parser verification.
+- Prevents unsupported scope inflation and checks important claims against the CV draft when one exists.
+- Keeps qualification gaps out of the letter prose.
+- Header fields (addressee, company, role, date, sign-off) are filled from the job and profile, not the model.
 
 ## Failure-tolerant batches
 
@@ -131,10 +139,10 @@ Application isolation cannot recover from the host machine shutting down, the se
 
 - Python 3.11+ (3.13 tested)
 - Node.js 20.19+ or 22.12+ for the Vite 7 frontend toolchain
-- [Ollama](https://ollama.com/) running locally
-- Enough RAM/VRAM for the model selected in the project-root `config.yaml`
+- Either [Ollama](https://ollama.com/) running locally, or an OpenRouter API key
+- Enough RAM/VRAM for the selected Ollama model when using the local provider
 
-The checked-in configuration currently uses `huihui_ai/gemma-4-abliterated:26b`. You can use another Ollama model, including smaller 9B-12B-class models, but output quality and supported context length will vary.
+The checked-in configuration defaults to Ollama with `huihui_ai/gemma-4-abliterated:26b`. You can use another Ollama model, including smaller 9B-12B-class models, or switch to OpenRouter in **Settings**. Output quality, context length, cost, and data handling vary by provider and model.
 
 ## Quick start
 
@@ -164,13 +172,17 @@ cd ../..
 
 The build is written to `ui/frontend/dist/` and published into `ui/frontend/` for the Python server. Rebuild after changing or pulling frontend source.
 
-### 3. Start Ollama and pull the configured model
+### 3. Configure a model provider
+
+For local Ollama generation, start Ollama and pull the configured model:
 
 ```bash
 ollama pull huihui_ai/gemma-4-abliterated:26b
 ```
 
-If you choose a different model, change it under **Settings > Ollama** or edit `config.yaml`.
+Or, open **Settings**, choose **OpenRouter — cloud**, add your API key, click **Refresh models**, select a model, and select one of the reasoning efforts the model publishes (such as low, high, or max). The catalog is fetched only when you press **Refresh models**; selecting a provider never starts Ollama or sends a generation prompt.
+
+If you choose a different model, change it under **Settings > AI provider** or edit `config.yaml`.
 
 ### 4. Start Joblication
 
@@ -189,27 +201,59 @@ Use the **Profile** page to save your candidate information and **Jobs** to add 
 - `settings/local_profile.json`
 - `applications/local_applications.json`
 
+## Windows desktop app (Electron)
+
+Joblication can also run as a native Windows desktop app. The Electron window starts the local API automatically and opens the existing React interface; it does not start Ollama or generate documents until you explicitly choose **Generate** in the app.
+
+Desktop builds keep personal data outside the installation directory. Your profile, job records, settings, checkpoints, and exports are stored in Joblication's per-user application-data workspace, so installing an update does not replace them.
+
+### Run the desktop app during development
+
+From the project root, after the normal Python prerequisites are installed:
+
+```powershell
+npm install
+python -m pip install -r requirements-desktop.txt
+npm run dev
+```
+
+`npm run dev` builds the frontend, starts the local backend with a per-user workspace, and opens the Electron window. It does not start Ollama; Ollama is only contacted if you explicitly generate with it selected as the provider. `npm start` is an equivalent shortcut. Set `JOBLICATION_PYTHON` to a specific Python executable if `python` is not on your PATH.
+
+### Build a Windows installer
+
+```powershell
+npm run desktop:dist
+```
+
+This builds the React assets, freezes the Python API/pipeline into a bundled service, and creates an NSIS installer under `dist/`. Model-backed generation then requires either a running Ollama instance with a pulled model or a configured OpenRouter API key and model. Browsing/editing local data and opening the app invoke neither provider.
+
+For a faster rebuild of only the bundled service, run:
+
+```powershell
+npm run desktop:python
+```
+
 ## Typical workflow
 
 1. Complete the **Profile** with specific, defensible evidence. Generation deliberately refuses to invent missing experience.
 2. Add job postings under **Jobs**.
 3. Open **Templates** to create or tune a CV layout, then select that template on each card under **Applications**.
-4. Choose **Full pipeline** and **CV + Cover letter**, then generate all or select specific jobs.
-5. Let the batch continue. Watch the live log if desired; per-job failures do not require supervision.
+4. Choose **CV + Letter**, **CV only**, or **Letter only**, then generate all or select specific jobs. Jobs run one at a time in a queue; a failure does not stop the rest.
+5. Let the batch continue; per-job failures do not require supervision.
 6. Review any **Complete with issues** badges and open **Review & edit**.
 7. Refine each document in the **Document studio**, then choose **Export PDFs**.
 
+For an employer-neutral document, open **General CV**, generate or edit the suggested title and summary, choose a template, and select **Generate CV only**. The internal General CV target remains hidden from the Jobs and Applications lists.
+
 ### Generation modes
 
-| UI mode | Starts at | Use when |
-|---------|-----------|----------|
-| **Full pipeline** | Stage 1 | Job/profile inputs changed or this is a new application |
-| **Stage 1 only** | Stage 1 | You only want refreshed requirements and fit analysis |
-| **From stage 2** | Stage 2 | Stage 1 is valid and you want a new CV plus downstream outputs |
-| **From stage 3** | Stage 3 | The CV is valid and only the cover letter needs regeneration |
-| **Build only** | Static build | Stage JSON is valid and only HTML/PDF exports need rebuilding |
+Choose what to produce under **Applications** → **Mode**. Each option runs the pipeline from the start and builds only the selected documents:
 
-Output can be **CV + Cover letter**, **CV / Resume only**, or **Cover letter only** where the selected starting stage supports it.
+| Mode | Builds |
+|------|--------|
+| **CV + Letter** | Tailored CV and cover letter |
+| **CV only** | Tailored CV (skips cover-letter generation) |
+| **Letter only** | Cover letter from profile + job (does not run the CV writer) |
 
 ## Document studio
 
@@ -259,29 +303,18 @@ $env:JOBLICATION_PDF_BROWSER = "C:\path\to\msedge.exe"
 
 ## Configuration
 
-The project-root `config.yaml` can be edited in the Settings UI. Changes apply to the next run.
+Settings shows theme, output folder, and AI provider. Other keys in the project-root `config.yaml` still apply on the next run if you edit the file directly.
 
 | Section | Important controls |
 |---------|--------------------|
-| `ollama` | API URL, model, think mode, automatic startup |
-| `generation` | Creative/precise temperatures, context window, top-p, repeat penalty, seed |
-| `batch_resilience` | Attempts, continue-on-error, low-fit skip, borderline-quality acceptance, previous-draft reuse |
-| `stage_2` | Keyword limits, profile grounding, claims enforcement, quality and parser passes |
-| `stage_3` | Body length, CV-claim grounding, quality and parser passes, unresolved-parser failure policy |
-
-Useful policy relationships:
-
-- `stage_2.verification.min_quality` and `stage_3.verification.min_quality` set the normal target.
-- `max_attempts_per_application` wraps a complete per-application stage attempt; stage verification passes occur inside that attempt.
-- A valid low-scoring draft with fit at or below `accept_low_quality_fit_at_most` may pass immediately so a borderline application cannot block the batch.
-- After exhausted exceptions with no usable draft, a fit below `skip_fit_below` becomes `skipped_low_fit` instead of an opaque failure.
-- Set `continue_on_error: false` only when you intentionally want fail-fast developer behavior.
+| `llm` / `ollama` / `openrouter` | Provider, model, API key, and reasoning effort (Settings → AI provider) |
+| `export` | Output folder for generated CVs, cover letters, and ATS reports (Settings → Output folder). Absolute paths are used as-is; relative paths are stored under the Joblication data folder |
 
 Other configuration files:
 
 | File | Description |
 |------|-------------|
-| `settings/template.json` | Default CV/letter template IDs, formats, output directory, and filename pattern |
+| `settings/template.json` | Default CV/letter template IDs, formats, filename pattern, and fallback output directory if `export.output_dir` is unset |
 | `settings/custom_templates.json` | Local component-based CV templates created in the editor (gitignored) |
 | `applications/application_meta.json` | Local status, notes, and per-job CV-template selections (gitignored) |
 | `settings/local_profile.json` | Local candidate profile |
@@ -309,17 +342,16 @@ python ui/backend/generate.py --from-stage stage_2 --only-stage stage_2
 Run stages directly from the project root:
 
 ```bash
-python engine/dynamic_engine/stage_1.py
 python engine/dynamic_engine/stage_2.py
 python engine/dynamic_engine/stage_3.py
 python engine/static_engine/build.py
 ```
 
-Stage data is checkpointed in `engine/dynamic_engine/data/`. Final files are written under `outputs/<Company_Role_YYYYMMDD>/` by default.
+Stage data is checkpointed in `engine/dynamic_engine/data/`. Final files are written under the folder set in **Settings → Output** (default `outputs/<Company_Role_YYYYMMDD>/`). When Electron is started from this checkout with `npm run dev`, the default relative `outputs` folder still goes to the repository rather than the Electron AppData workspace. Packaged installs use `Documents/Joblication/outputs` for that default unless Settings uses another path or `JOBLICATION_OUTPUT_ROOT` is set.
 
 ## Outputs
 
-Depending on `settings/template.json`, a successful build can produce:
+Depending on Settings → Output and `settings/template.json` formats, a successful build can produce:
 
 ```text
 outputs/<Company_Role_YYYYMMDD>/
@@ -358,9 +390,11 @@ The browser UI uses a local REST API on port 8080:
 - `GET/PUT /api/profile` - candidate profile
 - `GET/POST/PUT/DELETE /api/applications` - saved jobs
 - `GET /api/applications/view` - jobs with phases, outputs, and generation outcomes
+- `GET /api/general-cv` - saved General CV positioning and output metadata
+- `POST /api/general-cv/recommend` - recommend a profile-grounded title and summary
+- `POST /api/general-cv/generate` - start a General CV pipeline that builds only the CV
 - `POST /api/generate` - start a background run with stage, slug, and build-target options
 - `GET /api/generate/status` - current phase and final outcome summary
-- `GET /api/generate/log?offset=N` - incremental generation log
 - `GET/PUT /api/engine-config` - validated engine configuration
 - `GET/PUT /api/review/:slug` - structured stage 2/3 content plus review identity/output metadata
 - `POST /api/build/:slug` - rebuild selected documents after review edits
@@ -397,27 +431,27 @@ cd ui/frontend
 npm run build
 ```
 
-The Python suite covers batch retries/outcomes, fit fallback, source-grounded CV repairs, cover-letter quality gates, parser behavior, and ATS reporting. Model-backed generation remains an integration test and requires Ollama plus real local data.
+The Python suite covers the writer/reviewer JSON loop, independent CV/letter queue steps, batch retries/outcomes, OpenRouter request shaping, and ATS reporting. Model-backed generation remains an integration test and requires real local data plus the selected provider.
 
 ## Troubleshooting
 
 | Issue | What to check |
 |-------|---------------|
 | UI is blank or stale | Run `npm ci` once, then `npm run build`; hard-refresh the browser |
-| Generation fails before processing jobs | Confirm Ollama is running, the configured model is pulled, local data paths exist, and YAML is valid |
-| One job shows `failed` or `skipped` | Open its outcome details/log; fix profile/job data if needed and regenerate only that application or resume from the affected stage |
+| Generation fails before processing jobs | For Ollama, confirm it is running and the model is pulled. For OpenRouter, confirm the API key, model, and account access. Also check local data paths and YAML validity. |
+| One job shows `failed` or `skipped` | Open its outcome details; fix profile/job data if needed and regenerate only that application or resume from the affected stage |
 | Batch says **Complete with issues** | The run finished; inspect accepted, reused, skipped, or failed job badges instead of rerunning every successful job |
 | Run was interrupted by a restart/shutdown | Restart the server and rerun from the last safe stage; checkpointed applications and previous successful drafts remain available |
 | Review has no draft | Generate the required upstream stage; skipped/failed documents intentionally show an explanatory unavailable state |
 | PDF is missing after an edit | Choose **Export PDFs**; confirm `xhtml2pdf` is installed and the selected template renders valid HTML |
-| ATS report is missing | Build a CV (not letter-only) with valid Stage 1 and Stage 2 data |
+| ATS report is missing | Build a CV (not letter-only) with valid CV JSON |
 | Ollama runs out of memory | Use a smaller/quantized model, reduce the configured context window if the model supports it, or close other GPU-heavy processes |
-
-The live generation log and final traceback are stored under `engine/dynamic_engine/data/` for local diagnosis.
 
 ## Privacy and git
 
-The `.gitignore` excludes local profiles/applications, stage artifacts, generated outputs, environment files, dependencies, and normal frontend build output. Review files before committing if this repository previously tracked old `ui/frontend/assets/` bundles or `ui/frontend/index.html`; tracked files remain tracked even after an ignore rule is added.
+The `.gitignore` excludes local profiles/applications, stage artifacts, generated outputs, environment and secret overrides, dependencies, desktop bundles, local tool state, and normal frontend build output. The checked-in `config.yaml` contains publishable defaults and a blank OpenRouter key. Electron stores writable settings and personal data in the per-user application-data workspace while exporting generated documents to the output location described above.
+
+Before publishing, confirm that `config.yaml` still contains `api_key: ""` if you used the standalone browser server rather than Electron. Review files before committing if this repository previously tracked old `ui/frontend/assets/` bundles or `ui/frontend/index.html`; tracked files remain tracked even after an ignore rule is added.
 
 To remove previously tracked frontend build artifacts from the Git index without deleting the local build:
 

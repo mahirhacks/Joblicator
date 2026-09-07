@@ -6,10 +6,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from joblication_runtime import DATA_ROOT, RESOURCE_ROOT, data_path
+
 ENGINE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ENGINE_DIR.parent.parent
-DYNAMIC_DIR = PROJECT_ROOT / "engine" / "dynamic_engine"
-TEMPLATE_SETTINGS_PATH = PROJECT_ROOT / "settings" / "template.json"
+PROJECT_ROOT = DATA_ROOT
+DYNAMIC_DIR = RESOURCE_ROOT / "engine" / "dynamic_engine"
+TEMPLATE_SETTINGS_PATH = data_path("settings", "template.json")
 
 if str(DYNAMIC_DIR) not in sys.path:
     sys.path.insert(0, str(DYNAMIC_DIR))
@@ -26,7 +28,7 @@ def load_template_settings() -> dict[str, Any]:
 
 
 def load_engine_config() -> dict[str, Any]:
-    return load_config(PROJECT_ROOT / "config.yaml")
+    return load_config(data_path("config.yaml"))
 
 
 def load_stage_1(config: dict[str, Any] | None = None) -> dict[str, Any]:

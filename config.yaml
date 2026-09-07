@@ -1,23 +1,35 @@
+llm:
+  provider: ollama
 ollama:
   base_url: http://127.0.0.1:11434
   model: huihui_ai/gemma-4-abliterated:26b
   think: false
   auto_start: true
+openrouter:
+  base_url: https://openrouter.ai/api/v1
+  api_key: ""
+  model: openai/gpt-5.6-luna
+  reasoning_effort: max
+  app_name: Joblication
 generation:
-  temperature: 0.5             # default for uncategorized calls
-  creative_temperature: 0.65   # prose drafting (summary, bullets, letter body)
-  precise_temperature: 0.2     # reviews, scoring, claims, structured formatting
-  context_window: 8192         # compact stage prompts are designed to fit this window
+  temperature: 0.5
+  creative_temperature: 0.65
+  precise_temperature: 0.2
+  context_window: 32768
   top_p: 0.9
   repeat_penalty: 1.1
-  seed: 0                      # >0 = reproducible sampling
+  seed: 0
+  max_tokens: 12288
 batch_resilience:
   enabled: true
-  continue_on_error: true      # one broken job never stops the remaining batch
+  continue_on_error: true
   max_attempts_per_application: 3
-  skip_fit_below: 5            # after retries, record a no-document outcome below this fit
-  accept_low_quality_fit_at_most: 6  # valid 5-6/10-fit drafts may pass after review retries
-  reuse_previous_success: true # preserve the last buildable draft during transient model failures
+  skip_fit_below: 5
+  accept_low_quality_fit_at_most: 6
+  reuse_previous_success: true
+  retry_on_low_quality: false
+export:
+  output_dir: outputs
 applications:
   json: applications/local_applications.json
 profile:
@@ -30,7 +42,7 @@ stages:
   stage_3: engine/dynamic_engine/data/stage_3.json
 stage_2:
   keywords:
-    max_original_keyword: 30   # feed all stage-1 groups to stage 2 — 7 starved ATS coverage
+    max_original_keyword: 30
     max_synonym_keyword_per_original_keyword: 2
   grounding:
     skills_from_profile_only: true
@@ -46,10 +58,10 @@ stage_2:
   verification:
     enabled: true
     min_quality: 7
-    max_passes: 2
+    max_passes: 1
   parser_verification:
     enabled: true
-    max_passes: 2
+    max_passes: 1
   parser_autofix:
     enabled: true
 stage_3:
@@ -58,17 +70,16 @@ stage_3:
     max_words: 110
   honesty:
     use_stage_2_claims: true
-    # Gaps stay in metadata and claims checks; cover letters never volunteer weaknesses.
     max_gaps_in_letter: 3
   style_verification:
     enabled: true
   verification:
     enabled: true
     min_quality: 7
-    max_passes: 2
+    max_passes: 1
   parser_verification:
     enabled: true
-    max_passes: 2
+    max_passes: 1
     fail_on_unresolved: true
   parser_autofix:
     enabled: true

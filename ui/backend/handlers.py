@@ -10,13 +10,15 @@ import subprocess
 import threading
 import urllib.error
 import urllib.request
+from collections import deque
 from html import unescape
 from pathlib import Path
 from typing import Any
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+from joblication_runtime import RESOURCE_ROOT
+
+if str(RESOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(RESOURCE_ROOT))
 
 from engine.template_contract import normalize_layout, resolve_cv_template
 
@@ -30,15 +32,16 @@ from store import (
     list_output_folders,
     load_applications,
     load_custom_templates,
+    load_general_cv,
     load_generate_status,
     load_profile,
     load_template_settings,
-    generate_log_path,
     outputs_dir,
     profile_path,
     resolve_output_for_slug,
     save_applications,
     save_custom_templates,
+    save_general_cv,
     save_generate_status,
     save_profile,
     set_application_meta,
@@ -49,6 +52,7 @@ from store import (
 VALID_STATUSES = frozenset(
     {"unsubmitted", "submitted", "rejected", "interview", "accepted"}
 )
+GENERAL_CV_SLUG = "general_cv"
 
 _generate_thread: threading.Thread | None = None
 
@@ -118,6 +122,7 @@ def get_engine_config() -> tuple[int, dict[str, Any]]:
             "path": str(path.relative_to(ROOT)).replace("\\", "/"),
             "yaml": raw,
             "config": parsed,
+            "outputs_dir": str(outputs_dir()),
         },
     )
 
@@ -159,6 +164,14 @@ def put_engine_config(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     if not isinstance(parsed, dict):
         return _json_response(400, {"error": "Config root must be a YAML mapping"})
 
+    from utils import configured_export_dir
+
+    resolved_outputs = configured_export_dir(parsed, load_template_settings())
+    try:
+        resolved_outputs.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return _json_response(400, {"error": f"Could not create output folder: {exc}"})
+
     path = engine_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml_text, encoding="utf-8")
@@ -170,6 +183,7 @@ def put_engine_config(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             "path": str(path.relative_to(ROOT)).replace("\\", "/"),
             "yaml": yaml_text,
             "config": parsed,
+            "outputs_dir": str(resolved_outputs),
         },
     )
 
@@ -186,6 +200,175 @@ def put_profile(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     return _json_response(200, {"ok": True, "profile": load_profile()})
 
 
+def _is_system_application(record: Any) -> bool:
+    return isinstance(record, dict) and bool(record.get("_system"))
+
+
+def _visible_application_slugs(apps: dict[str, Any] | None = None) -> list[str]:
+    source = apps if apps is not None else load_applications()
+    return [
+        slug for slug, record in source.items()
+        if isinstance(record, dict) and not _is_system_application(record)
+    ]
+
+
+def _general_cv_provider() -> dict[str, str]:
+    from model_client import selected_provider
+    from utils import load_config
+
+    config = load_config(engine_config_path())
+    provider = selected_provider(config)
+    settings = config.get(provider, {}) if isinstance(config.get(provider), dict) else {}
+    return {"provider": provider, "model": str(settings.get("model", "")).strip()}
+
+
+def get_general_cv() -> tuple[int, dict[str, Any]]:
+    stage2 = _read_stage_file("stage_2")
+    app_key = _resolve_app_key(GENERAL_CV_SLUG, stage2)
+    return _json_response(
+        200,
+        {
+            "general_cv": load_general_cv(),
+            "output": resolve_output_for_slug(GENERAL_CV_SLUG),
+            "review_ready": bool(app_key and isinstance(stage2.get(app_key), dict)),
+            "generation": load_generate_status(),
+            "cv_template_id": get_application_meta(GENERAL_CV_SLUG).get("cv_template_id", ""),
+            **_general_cv_provider(),
+        },
+    )
+
+
+def recommend_general_cv() -> tuple[int, dict[str, Any]]:
+    from model_client import call_model, selected_provider
+    from ollama import parse_llm_json
+    from utils import generation_options, load_config, profile_for_prompt
+
+    profile = load_profile()
+    if not profile:
+        return _json_response(400, {"error": "Complete your profile before creating a General CV."})
+
+    config = load_config(engine_config_path())
+    provider = selected_provider(config)
+    prompt = {
+        "task": "Choose the single strongest general-purpose target role for this candidate and write their CV summary.",
+        "candidate_profile": profile_for_prompt(profile),
+        "rules": [
+            "Use only evidence present in the candidate profile.",
+            "Choose one concise, market-recognizable job title, not a list or a headline with separators.",
+            "Prefer the title that best represents the candidate's strongest demonstrated experience and skills.",
+            "Write a 45-70 word professional summary suitable for the top of a general CV.",
+            "Do not mention a specific employer, vacancy, or job posting.",
+            "Do not invent years of experience, metrics, certifications, employers, or technical capabilities.",
+            "Return JSON only with title, summary, strengths, and rationale.",
+        ],
+        "reply_schema": {
+            "title": "string",
+            "summary": "string",
+            "strengths": ["3 to 6 short evidence-based strengths"],
+            "rationale": "one short sentence explaining why this title fits",
+        },
+    }
+    raw = call_model(
+        config,
+        [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise career-positioning strategist. Ground every claim in the supplied profile. "
+                    "Return valid JSON only and never expose private contact details in the response."
+                ),
+            },
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False, indent=2)},
+        ],
+        options={**generation_options(config, "precise"), "max_tokens": 900},
+    )
+    try:
+        parsed = parse_llm_json(raw)
+    except json.JSONDecodeError as exc:
+        return _json_response(502, {"error": f"The AI returned an invalid recommendation: {exc}"})
+    if not isinstance(parsed, dict):
+        return _json_response(502, {"error": "The AI returned an invalid recommendation."})
+
+    title = re.sub(r"\s+", " ", str(parsed.get("title", "")).strip())[:100]
+    summary = re.sub(r"\s+", " ", str(parsed.get("summary", "")).strip())[:1200]
+    strengths_raw = parsed.get("strengths", [])
+    strengths = (
+        [re.sub(r"\s+", " ", str(item).strip())[:120] for item in strengths_raw if str(item).strip()][:6]
+        if isinstance(strengths_raw, list)
+        else []
+    )
+    rationale = re.sub(r"\s+", " ", str(parsed.get("rationale", "")).strip())[:400]
+    if not title or not summary:
+        return _json_response(502, {"error": "The AI recommendation did not include both a title and summary."})
+
+    state = {
+        "title": title,
+        "summary": summary,
+        "strengths": strengths,
+        "rationale": rationale,
+        "provider": provider,
+        "updated_at": _now_iso(),
+    }
+    save_general_cv(state)
+    return _json_response(200, {"ok": True, "general_cv": state, **_general_cv_provider()})
+
+
+def generate_general_cv(body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    body = body or {}
+    title = re.sub(r"\s+", " ", str(body.get("title", "")).strip())[:100]
+    summary = re.sub(r"\s+", " ", str(body.get("summary", "")).strip())[:1200]
+    strengths_raw = body.get("strengths", [])
+    strengths = (
+        [re.sub(r"\s+", " ", str(item).strip())[:120] for item in strengths_raw if str(item).strip()][:6]
+        if isinstance(strengths_raw, list)
+        else []
+    )
+    if not title or not summary:
+        return _json_response(400, {"error": "A recommended title and professional summary are required."})
+
+    current = load_general_cv()
+    state = {
+        **current,
+        "title": title,
+        "summary": summary,
+        "strengths": strengths,
+        "updated_at": _now_iso(),
+    }
+    save_general_cv(state)
+
+    positioning = "\n".join(f"- {item}" for item in strengths) or "- Use the candidate's strongest profile evidence."
+    apps = load_applications()
+    apps[GENERAL_CV_SLUG] = {
+        "company": "General Profile",
+        "title": title,
+        "location": "",
+        "url": "",
+        "about": "General-purpose CV generated from the candidate's saved profile.",
+        "description": (
+            f"Create an employer-neutral CV targeting the role: {title}.\n\n"
+            f"Approved professional positioning summary:\n{summary}\n\n"
+            f"Evidence-based strengths to emphasize:\n{positioning}\n\n"
+            "This is not tied to a specific vacancy or employer. Use only facts from the candidate profile."
+        ),
+        "_system": "general_cv",
+    }
+    save_applications(apps)
+
+    template_id = str(body.get("cv_template_id", "")).strip()
+    if template_id:
+        resolved_template = resolve_cv_template(ROOT, template_id=template_id)
+        set_application_meta(GENERAL_CV_SLUG, cv_template_id=resolved_template["id"])
+
+    status, payload = start_generate(
+        {
+            "from_stage": "stage_2",
+            "slugs": [GENERAL_CV_SLUG],
+            "build_targets": "cv",
+        }
+    )
+    return _json_response(status, {**payload, "general_cv": state})
+
+
 def list_jobs() -> tuple[int, dict[str, Any]]:
     from applications.slug_utils import display_company
 
@@ -193,6 +376,8 @@ def list_jobs() -> tuple[int, dict[str, Any]]:
     items = []
     for slug, record in apps.items():
         if not isinstance(record, dict):
+            continue
+        if _is_system_application(record):
             continue
         meta = get_application_meta(slug)
         items.append(
@@ -372,6 +557,8 @@ def list_applications_view() -> tuple[int, dict[str, Any]]:
     for slug, record in apps.items():
         if not isinstance(record, dict):
             continue
+        if _is_system_application(record):
+            continue
         meta = get_application_meta(slug)
         out = resolve_output_for_slug(slug)
         phases = _pipeline_phases(slug)
@@ -541,7 +728,7 @@ def put_review_html(slug: str, body: dict[str, Any]) -> tuple[int, dict[str, Any
 
     pdf_filename = next((name for name in output["files"] if pdf_pattern in name.lower()), None)
     if pdf_filename:
-        static_engine = ROOT / "engine" / "static_engine"
+        static_engine = RESOURCE_ROOT / "engine" / "static_engine"
         if str(static_engine) not in sys.path:
             sys.path.insert(0, str(static_engine))
         from renderer import write_pdf  # noqa: E402
@@ -577,7 +764,34 @@ def rebuild_application(slug: str, body: dict[str, Any] | None = None) -> tuple[
     except Exception as exc:
         return _json_response(500, {"error": str(exc)})
 
-    return _json_response(200, {"ok": True, "outputs": list_output_folders()})
+    output = resolve_output_for_slug(slug)
+    expected_patterns = []
+    if "cv" in targets:
+        expected_patterns.append("_cv.pdf")
+    if "letter" in targets:
+        expected_patterns.append("_cover_letter.pdf")
+    files = output.get("files", []) if output else []
+    missing = [
+        pattern for pattern in expected_patterns
+        if not any(pattern in str(filename).lower() for filename in files)
+    ]
+    if not output or missing:
+        labels = ", ".join(pattern.removeprefix("_").removesuffix(".pdf") for pattern in missing)
+        detail = f" Missing: {labels}." if labels else ""
+        return _json_response(
+            500,
+            {"error": f"The document build finished without producing the requested PDF.{detail}"},
+        )
+
+    return _json_response(
+        200,
+        {
+            "ok": True,
+            "output_folder": output["folder"],
+            "files": files,
+            "outputs": list_output_folders(),
+        },
+    )
 
 
 def list_templates() -> tuple[int, dict[str, Any]]:
@@ -652,46 +866,12 @@ def generate_status() -> tuple[int, dict[str, Any]]:
     return _json_response(200, load_generate_status())
 
 
-def get_generate_log(offset: str = "0") -> tuple[int, dict[str, Any]]:
-    try:
-        start = max(0, int(offset))
-    except (TypeError, ValueError):
-        start = 0
-
-    status = load_generate_status()
-    path = generate_log_path()
-    if not path.is_file():
-        return _json_response(
-            200,
-            {
-                "text": "",
-                "offset": 0,
-                "running": bool(status.get("running")),
-                "step": str(status.get("step", "")),
-            },
-        )
-
-    content = path.read_text(encoding="utf-8", errors="replace")
-    if start > len(content):
-        start = len(content)
-    return _json_response(
-        200,
-        {
-            "text": content[start:],
-            "offset": len(content),
-            "running": bool(status.get("running")),
-            "step": str(status.get("step", "")),
-        },
-    )
-
-
-VALID_FROM_STAGES = frozenset({"stage_1", "stage_2", "stage_3", "build"})
+VALID_FROM_STAGES = frozenset({"stage_2", "stage_3", "build"})
 
 STEP_LABELS = {
     "starting": "Starting",
-    "stage_1": "Stage 1 — keywords & tailoring",
-    "stage_2": "Stage 2 — tailored resume",
-    "stage_3": "Stage 3 — cover letter",
+    "stage_2": "CV — write & review JSON",
+    "stage_3": "Letter — write & review JSON",
     "build": "Static build — CV & cover letter PDFs",
     "complete": "Complete",
     "complete_with_issues": "Complete with issues",
@@ -701,14 +881,20 @@ STEP_LABELS = {
 
 def start_generate(body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
     body = body or {}
-    from_stage = str(body.get("from_stage", "stage_1")).strip() or "stage_1"
     only_stage_raw = body.get("only_stage")
     only_stage = str(only_stage_raw).strip() if only_stage_raw else None
     slugs_raw = body.get("slugs")
     slugs: list[str] | None = None
     if isinstance(slugs_raw, list):
         slugs = [str(item).strip() for item in slugs_raw if str(item).strip()]
+    if not slugs:
+        slugs = _visible_application_slugs()
     build_targets = _parse_build_targets_from_body(body)
+    from_stage = str(body.get("from_stage") or "").strip()
+    if from_stage in {"", "stage_1"}:
+        from_stage = "stage_3" if build_targets == frozenset({"letter"}) else "stage_2"
+    if only_stage == "stage_1":
+        only_stage = "stage_2"
 
     prereq_error = _validate_generate_prerequisites(from_stage, slugs, build_targets)
     if prereq_error:
@@ -723,14 +909,22 @@ def start_generate(body: dict[str, Any] | None = None) -> tuple[int, dict[str, A
         status = {**status, "running": False, "step": "failed", "error": status.get("error") or "Previous run stopped unexpectedly"}
 
     def worker() -> None:
-        log_path = generate_log_path()
-        try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text("", encoding="utf-8")
-        except OSError:
-            pass
-
-        save_generate_status({"running": True, "step": "starting", "error": None, "finished_at": None})
+        save_generate_status(
+            {
+                "running": True,
+                "step": "starting",
+                "error": None,
+                "finished_at": None,
+                "queue": {
+                    "index": 0,
+                    "total": len(slugs),
+                    "slug": None,
+                    "completed": [],
+                    "failed": [],
+                    "remaining": list(slugs),
+                },
+            }
+        )
         try:
             _run_full_pipeline(
                 from_stage=from_stage,
@@ -738,7 +932,7 @@ def start_generate(body: dict[str, Any] | None = None) -> tuple[int, dict[str, A
                 slugs=slugs,
                 build_targets=build_targets,
             )
-            preferred_stage = only_stage if only_stage in {"stage_1", "stage_2", "stage_3"} else None
+            preferred_stage = only_stage if only_stage in {"stage_2", "stage_3"} else None
             if preferred_stage is None and from_stage != "build":
                 preferred_stage = "stage_3" if "letter" in build_targets else "stage_2"
             outcome_summary = _generation_outcome_summary(slugs, preferred_stage)
@@ -748,6 +942,7 @@ def start_generate(body: dict[str, Any] | None = None) -> tuple[int, dict[str, A
                 or outcome_summary.get("skipped")
                 or outcome_summary.get("failed")
             )
+            previous = load_generate_status()
             save_generate_status(
                 {
                     "running": False,
@@ -755,26 +950,19 @@ def start_generate(body: dict[str, Any] | None = None) -> tuple[int, dict[str, A
                     "error": None,
                     "finished_at": _now_iso(),
                     "outcome_summary": outcome_summary,
+                    "queue": previous.get("queue"),
                 }
             )
         except Exception as exc:
-            import traceback
-
             detail = str(exc).strip() or repr(exc)
-            tb = traceback.format_exc()
-            log_path = generate_log_path()
-            try:
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(log_path, "a", encoding="utf-8") as log_file:
-                    log_file.write(f"\n{tb}\n")
-            except OSError:
-                pass
+            previous = load_generate_status()
             save_generate_status(
                 {
                     "running": False,
                     "step": "failed",
                     "error": detail,
                     "finished_at": _now_iso(),
+                    "queue": previous.get("queue"),
                 }
             )
 
@@ -814,21 +1002,38 @@ def _app_key_for_slug(slug: str) -> str | None:
     return None
 
 
+def _entry_for_slug(stage: dict[str, Any], slug: str) -> dict[str, Any] | None:
+    wanted = str(slug or "").strip()
+    if not wanted:
+        return None
+    for key, entry in stage.items():
+        if not str(key).startswith("application_") or not isinstance(entry, dict):
+            continue
+        if str(entry.get("source_slug", "")).strip() == wanted:
+            return entry
+    app_key = _app_key_for_slug(wanted)
+    if not app_key:
+        return None
+    entry = stage.get(app_key)
+    if not isinstance(entry, dict):
+        return None
+    entry_slug = str(entry.get("source_slug", "")).strip()
+    if entry_slug and entry_slug != wanted:
+        return None
+    return entry
+
+
 def _pipeline_phases(slug: str) -> dict[str, bool]:
     if str(DYNAMIC_ENGINE) not in sys.path:
         sys.path.insert(0, str(DYNAMIC_ENGINE))
     from batch_resilience import is_buildable  # noqa: E402
 
-    stage1 = _read_stage_file("stage_1")
     stage2 = _read_stage_file("stage_2")
     stage3 = _read_stage_file("stage_3")
-    app_key = _app_key_for_slug(slug)
-    has_stage1 = bool(app_key and is_buildable(stage1.get(app_key)))
-    has_stage2 = bool(app_key and is_buildable(stage2.get(app_key)))
-    has_stage3 = bool(app_key and is_buildable(stage3.get(app_key)))
+    has_stage2 = is_buildable(_entry_for_slug(stage2, slug))
+    has_stage3 = is_buildable(_entry_for_slug(stage3, slug))
     has_build = resolve_output_for_slug(slug) is not None
     return {
-        "stage_1": has_stage1,
         "stage_2": has_stage2,
         "stage_3": has_stage3,
         "build": has_build,
@@ -836,12 +1041,9 @@ def _pipeline_phases(slug: str) -> dict[str, bool]:
 
 
 def _pipeline_outcomes(slug: str) -> dict[str, dict[str, Any]]:
-    app_key = _app_key_for_slug(slug)
-    if not app_key:
-        return {}
     outcomes: dict[str, dict[str, Any]] = {}
-    for stage_name in ("stage_1", "stage_2", "stage_3"):
-        entry = _read_stage_file(stage_name).get(app_key)
+    for stage_name in ("stage_2", "stage_3"):
+        entry = _entry_for_slug(_read_stage_file(stage_name), slug)
         if not isinstance(entry, dict):
             continue
         meta = entry.get("_generation")
@@ -855,13 +1057,13 @@ def _generation_outcome_summary(
     preferred_stage: str | None = None,
 ) -> dict[str, int]:
     apps = load_applications()
-    selected = slugs if slugs else list(apps.keys())
+    selected = slugs if slugs else _visible_application_slugs(apps)
     summary = {"total": len(selected), "generated": 0, "accepted": 0, "reused": 0, "skipped": 0, "failed": 0}
     for slug in selected:
         outcomes = _pipeline_outcomes(slug)
         outcome = outcomes.get(preferred_stage) if preferred_stage else None
         if not outcome:
-            outcome = outcomes.get("stage_3") or outcomes.get("stage_2") or outcomes.get("stage_1")
+            outcome = outcomes.get("stage_3") or outcomes.get("stage_2")
         status = str((outcome or {}).get("status", "generated"))
         if status == "generated":
             summary["generated"] += 1
@@ -900,14 +1102,13 @@ def _validate_generate_prerequisites(
     if not doc_targets:
         return "Select at least one document to build (cv, letter, or both)"
     if from_stage == "stage_3" and doc_targets == frozenset({"cv"}):
-        return "CV-only output does not use stage 3 — choose From stage 2 or Build only"
+        return "CV-only output does not use the letter stage — start from the CV writer or Build only"
 
     apps = load_applications()
-    app_slugs = slugs if slugs else list(apps.keys())
+    app_slugs = slugs if slugs else _visible_application_slugs(apps)
     if not app_slugs:
         return "No applications to generate"
 
-    stage1 = _read_stage_file("stage_1")
     stage2 = _read_stage_file("stage_2")
     stage3 = _read_stage_file("stage_3")
 
@@ -917,20 +1118,17 @@ def _validate_generate_prerequisites(
         app_key = _app_key_for_slug(slug)
         if not app_key:
             return f"Could not resolve application key for: {slug}"
-        if from_stage in ("stage_2", "stage_3", "build") and not isinstance(stage1.get(app_key), dict):
-            return f"{slug}: stage 1 not complete — run stage 1 first"
-        if from_stage in ("stage_3", "build") and not isinstance(stage2.get(app_key), dict):
-            return f"{slug}: stage 2 not complete — run stage 2 first"
-        if from_stage == "build" and "letter" in doc_targets and not isinstance(stage3.get(app_key), dict):
-            return f"{slug}: stage 3 not complete — run stage 3 first"
-        if from_stage == "build" and doc_targets == frozenset({"cv"}) and not isinstance(stage2.get(app_key), dict):
-            return f"{slug}: stage 2 not complete — run stage 2 first"
+        if from_stage == "build" and "cv" in doc_targets and not isinstance(stage2.get(app_key), dict) and _entry_for_slug(stage2, slug) is None:
+            return f"{slug}: CV JSON is missing — generate the CV first"
+        if from_stage == "build" and "letter" in doc_targets and not isinstance(stage3.get(app_key), dict) and _entry_for_slug(stage3, slug) is None:
+            return f"{slug}: letter JSON is missing — generate the letter first"
+        if from_stage == "stage_3" and "letter" not in doc_targets:
+            return "Letter stage requires letter output — choose Letter only or CV + Letter"
     return None
 
 
 def _resolve_app_key(slug: str, stage2: dict[str, Any]) -> str | None:
-    stage1 = _read_stage_file("stage_1")
-    for key, entry in stage1.items():
+    for key, entry in stage2.items():
         if not key.startswith("application_") or not isinstance(entry, dict):
             continue
         if entry.get("source_slug") == slug:
@@ -940,16 +1138,13 @@ def _resolve_app_key(slug: str, stage2: dict[str, Any]) -> str | None:
 
 
 def _run_full_pipeline(
-    from_stage: str = "stage_1",
+    from_stage: str = "stage_2",
     only_stage: str | None = None,
     slugs: list[str] | None = None,
     build_targets: frozenset[str] | None = None,
 ) -> None:
     """Run pipeline in a child process so Windows HTTP server threads stay stable."""
-    script = ROOT / "ui" / "backend" / "generate.py"
-    log_path = generate_log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text("", encoding="utf-8")
+    script = RESOURCE_ROOT / "ui" / "backend" / "generate.py"
 
     targets = build_targets or frozenset({"cv", "letter"})
     targets_arg = "both" if targets == frozenset({"cv", "letter"}) else ",".join(sorted(targets))
@@ -959,6 +1154,13 @@ def _run_full_pipeline(
         cmd.extend(["--only-stage", only_stage])
     if slugs:
         cmd.extend(["--slugs", ",".join(slugs)])
+
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--joblication-mode", "pipeline", "--ui", "--from-stage", from_stage, "--build-targets", targets_arg]
+        if only_stage:
+            cmd.extend(["--only-stage", only_stage])
+        if slugs:
+            cmd.extend(["--slugs", ",".join(slugs)])
 
     proc = subprocess.Popen(
         cmd,
@@ -972,35 +1174,34 @@ def _run_full_pipeline(
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
 
-    with open(log_path, "a", encoding="utf-8", newline="\n") as log_file:
-        if proc.stdout is not None:
-            for line in proc.stdout:
-                log_file.write(line)
-                log_file.flush()
+    output_tail: deque[str] = deque(maxlen=200)
+    if proc.stdout is not None:
+        for line in proc.stdout:
+            output_tail.append(line)
 
     returncode = proc.wait()
     if returncode == 0:
         return
 
-    combined = log_path.read_text(encoding="utf-8", errors="replace")
-    raise RuntimeError(_parse_generate_error(combined, log_path))
+    combined = "".join(output_tail)
+    raise RuntimeError(_parse_generate_error(combined, returncode))
 
 
-def _parse_generate_error(stderr: str, log_path: Path) -> str:
+def _parse_generate_error(stderr: str, returncode: int) -> str:
     for line in reversed(stderr.splitlines()):
         line = line.strip()
         if line.startswith("Error:"):
             return line[6:].strip()
         if line and not line.startswith("==="):
             return line
-    return f"Generation failed. See {log_path.relative_to(ROOT)} for details."
+    return f"Generation failed (exit code {returncode})."
 
 
 def _run_build_only(
     slugs: list[str] | None = None,
     build_targets: frozenset[str] | None = None,
-) -> None:
-    build_script = ROOT / "engine" / "static_engine" / "build.py"
+) -> str:
+    build_script = RESOURCE_ROOT / "engine" / "static_engine" / "build.py"
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     if slugs:
         env["JOBLICATION_SLUGS"] = ",".join(slugs)
@@ -1008,8 +1209,13 @@ def _run_build_only(
     if targets != frozenset({"cv", "letter"}):
         env["JOBLICATION_BUILD_TARGETS"] = ",".join(sorted(targets))
 
+    command = (
+        [sys.executable, "--joblication-mode", "build"]
+        if getattr(sys, "frozen", False)
+        else [sys.executable, "-u", str(build_script)]
+    )
     proc = subprocess.Popen(
-        [sys.executable, "-u", str(build_script)],
+        command,
         cwd=str(ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -1018,12 +1224,48 @@ def _run_build_only(
         errors="replace",
         env=env,
     )
+    output_lines: list[str] = []
     if proc.stdout is not None:
-        for _line in proc.stdout:
-            pass
+        output_lines.extend(proc.stdout)
     returncode = proc.wait()
+    output = "".join(output_lines)
     if returncode != 0:
-        raise RuntimeError(f"Static build failed (exit {returncode})")
+        detail = next((line.strip() for line in reversed(output_lines) if line.strip()), "")
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"Static build failed (exit {returncode}){suffix}")
+    if re.search(r"Static build complete:\s*0 application", output, re.I):
+        warning = next(
+            (line.strip().removeprefix("Warning: ") for line in reversed(output_lines) if "Warning:" in line),
+            "No buildable document was produced.",
+        )
+        raise RuntimeError(warning)
+    return output
+
+
+def list_openrouter_models() -> tuple[int, dict[str, Any]]:
+    """Fetch model and reasoning metadata only when the settings UI requests it."""
+    try:
+        import yaml
+    except ImportError:
+        return _json_response(500, {"error": "PyYAML is required on the server"})
+
+    path = engine_config_path()
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        return _json_response(500, {"error": f"Could not read engine configuration: {exc}"})
+    if parsed is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        return _json_response(500, {"error": "Config root must be a YAML mapping"})
+
+    try:
+        from openrouter import list_openrouter_models as fetch_models  # noqa: E402
+
+        models = fetch_models(parsed)
+    except (ImportError, RuntimeError, ValueError) as exc:
+        return _json_response(502, {"error": str(exc)})
+    return _json_response(200, {"models": models, "count": len(models)})
 
 
 def resolve_output_file(relative: str) -> Path | None:

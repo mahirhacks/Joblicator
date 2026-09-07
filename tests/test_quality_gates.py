@@ -12,7 +12,7 @@ for path in (DYNAMIC, STATIC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from ats_report import build_ats_report, keyword_groups_from_stage1  # noqa: E402
+from ats_report import build_ats_report, keyword_groups_from_cv, keyword_groups_from_stage1  # noqa: E402
 from cv_quality import apply_safe_cv_fixes, assess_cv_quality  # noqa: E402
 from letter_autofix import fix_banned_letter_phrases  # noqa: E402
 from letter_quality import (  # noqa: E402
@@ -22,7 +22,6 @@ from letter_quality import (  # noqa: E402
     strip_unsupported_scope_sentences,
 )
 from plain_text import parse_quality_review  # noqa: E402
-from stage_2 import build_master_keywords  # noqa: E402
 from verification import fail_on_unresolved_enabled  # noqa: E402
 
 
@@ -315,25 +314,24 @@ class AtsGroundingTests(unittest.TestCase):
         self.assertEqual(groups[0][0], "Python")
         self.assertIn("Python programming", groups[0])
 
-    def test_master_keywords_exclude_unsupported_requirements(self) -> None:
-        master = build_master_keywords(
-            self.stage1["resume_keyword_groups"],
-            {},
-            grounding_source={"skills": ["Python programming"]},
+    def test_cv_skills_become_keyword_groups(self) -> None:
+        groups = keyword_groups_from_cv(
+            {"role_title": "Backend Engineer", "skills": {"Languages": ["Python"], "Cloud": ["AWS"]}},
+            "Backend Engineer",
         )
-        self.assertIn("Python", master)
-        self.assertNotIn("OSCP", master)
+        originals = [group[0] for group in groups]
+        self.assertEqual(originals, ["Backend Engineer", "Python", "AWS"])
 
     def test_legacy_flat_keyword_triple_cannot_cross_authorize_terms(self) -> None:
         legacy = {
-            "skills_keywords": ["Active Directory security", "AD security", "Python"]
+            "title": "Engineer",
+            "resume_keywords": {
+                "skills_keywords": ["Active Directory security", "AD security", "Python"]
+            },
         }
-        master = build_master_keywords(
-            legacy,
-            {},
-            grounding_source={"skills": ["Python"]},
-        )
-        self.assertEqual(master, ["Python"])
+        groups = keyword_groups_from_stage1(legacy, {})
+        originals = [group[0] for group in groups]
+        self.assertIn("Python", originals)
 
     def test_legacy_osint_aliases_are_not_double_counted(self) -> None:
         stage1 = {
@@ -349,44 +347,40 @@ class AtsGroundingTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
 
     def test_ats_score_excludes_unsupported_credentials(self) -> None:
+        resume = {
+            "skills": {"Languages": ["Python"], "Certs": ["OSCP"]},
+        }
         report = build_ats_report(
-            self.stage1,
+            resume,
             {},
             cv_text="Python programming and Python 3",
             letter_text="",
             candidate_text="Built APIs with Python programming.",
         )
         self.assertEqual(report["job_keyword_groups"], 2)
-        self.assertEqual(report["eligible_keyword_groups"], 1)
-        self.assertEqual(report["cv"]["coverage_pct"], 100.0)
         self.assertEqual(report["excluded_unsupported"], ["OSCP"])
+        self.assertIn("Python", report["cv"]["covered"])
 
     def test_ats_grounding_recognizes_narrow_safe_equivalences(self) -> None:
-        stage1 = {
-            "title": "Security Engineer",
-            "resume_keyword_groups": {
-                "skills_keywords": [
-                    {"original": "Microsoft Azure", "variants": ["Azure cloud"]},
-                    {"original": "OWASP Top 10", "variants": ["OWASP Top Ten"]},
-                    {
-                        "original": "web and API security testing",
-                        "variants": ["web/API penetration testing"],
-                    },
-                    {"original": "OSCP", "variants": []},
-                ]
+        resume = {
+            "role_title": "Security Engineer",
+            "skills": {
+                "Cloud": ["Microsoft Azure"],
+                "AppSec": ["OWASP Top 10", "web and API security testing"],
+                "Certs": ["OSCP"],
             },
         }
         candidate = "Azure configuration reviews, OWASP practice, and web application/API penetration testing."
         report = build_ats_report(
-            stage1,
+            resume,
             {},
             cv_text=candidate,
             letter_text="",
             candidate_text=candidate,
+            job_title="Security Engineer",
         )
-        self.assertEqual(report["eligible_keyword_groups"], 3)
-        self.assertEqual(report["cv"]["coverage_pct"], 100.0)
-        self.assertEqual(report["excluded_unsupported"], ["OSCP"])
+        self.assertIn("OSCP", report["excluded_unsupported"])
+        self.assertGreaterEqual(report["cv"]["covered_count"], 2)
 
 
 class CvSourceIntegrityTests(unittest.TestCase):

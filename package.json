@@ -1,0 +1,69 @@
+{
+  "name": "joblication-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first, ATS-friendly CV and cover-letter studio.",
+  "author": "Joblication contributors",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "npm run desktop:dev",
+    "start": "npm run desktop:dev",
+    "frontend:build": "npm --prefix ui/frontend run build",
+    "desktop:dev": "npm run frontend:build && electron .",
+    "desktop:python": "python -m PyInstaller desktop/joblication_server.spec --noconfirm --distpath desktop/python-dist --workpath desktop/.pyinstaller-work",
+    "desktop:dist": "npm run frontend:build && npm run desktop:python && electron-builder --win nsis",
+    "test": "python -m unittest discover -s tests -v"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.joblication.desktop",
+    "productName": "Joblication",
+    "asar": true,
+    "files": [
+      "desktop/main.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop/python-dist/JoblicationServer",
+        "to": "python"
+      },
+      {
+        "from": "ui/frontend",
+        "to": "joblication/ui/frontend",
+        "filter": [
+          "index.html",
+          "assets/**/*"
+        ]
+      },
+      {
+        "from": "templates",
+        "to": "joblication/templates"
+      },
+      {
+        "from": "config.yaml",
+        "to": "joblication/config.yaml"
+      },
+      {
+        "from": "applications/storage.json",
+        "to": "joblication/applications/storage.json"
+      },
+      {
+        "from": "settings/template.json",
+        "to": "joblication/settings/template.json"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

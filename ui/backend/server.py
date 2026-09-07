@@ -12,18 +12,25 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-BACKEND_DIR = Path(__file__).resolve().parent
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
-HOST = "127.0.0.1"
-PORT = 8080
+from joblication_runtime import DATA_ROOT, resource_path, ensure_data_workspace
+
+ROOT = DATA_ROOT
+BACKEND_DIR = Path(__file__).resolve().parent
+FRONTEND_DIR = resource_path("ui", "frontend")
+
+HOST = os.environ.get("JOBLICATION_HOST", "127.0.0.1")
+PORT = int(os.environ.get("JOBLICATION_PORT", "8080"))
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -111,8 +118,14 @@ class JoblicationHandler(BaseHTTPRequestHandler):
         if parts == ["api", "engine-config"]:
             self._respond(*handlers.get_engine_config())
             return True
+        if parts == ["api", "providers", "openrouter", "models"]:
+            self._respond(*handlers.list_openrouter_models())
+            return True
         if parts == ["api", "profile"]:
             self._respond(*handlers.get_profile())
+            return True
+        if parts == ["api", "general-cv"]:
+            self._respond(*handlers.get_general_cv())
             return True
         if parts == ["api", "applications"]:
             self._respond(*handlers.list_jobs())
@@ -143,11 +156,6 @@ class JoblicationHandler(BaseHTTPRequestHandler):
         if parts == ["api", "generate", "status"]:
             self._respond(*handlers.generate_status())
             return True
-        if parts == ["api", "generate", "log"]:
-            params = self._query_params()
-            offset = params.get("offset", ["0"])[0]
-            self._respond(*handlers.get_generate_log(offset))
-            return True
         if len(parts) >= 3 and parts[1] == "files":
             rel = "/".join(unquote(p) for p in parts[2:])
             file_path = handlers.resolve_output_file(rel)
@@ -156,7 +164,8 @@ class JoblicationHandler(BaseHTTPRequestHandler):
                 return True
             mime, _ = mimetypes.guess_type(str(file_path))
             content_type = mime or "application/octet-stream"
-            inline = content_type in ("application/pdf", "text/html")
+            download = self._query_params().get("download", ["0"])[0] == "1"
+            inline = not download and content_type in ("application/pdf", "text/html")
             self._send_bytes(
                 200,
                 file_path.read_bytes(),
@@ -179,6 +188,12 @@ class JoblicationHandler(BaseHTTPRequestHandler):
             return True
         if parts == ["api", "generate"]:
             self._respond(*handlers.start_generate(body))
+            return True
+        if parts == ["api", "general-cv", "recommend"]:
+            self._respond(*handlers.recommend_general_cv())
+            return True
+        if parts == ["api", "general-cv", "generate"]:
+            self._respond(*handlers.generate_general_cv(body))
             return True
         if len(parts) == 3 and parts[1] == "build":
             self._respond(*handlers.rebuild_application(parts[2], body))
@@ -286,6 +301,7 @@ def main() -> None:
     from handlers import recover_generate_on_startup
     from store import applications_path, profile_path
 
+    ensure_data_workspace()
     recover_generate_on_startup()
 
     if hasattr(sys.stderr, "reconfigure"):

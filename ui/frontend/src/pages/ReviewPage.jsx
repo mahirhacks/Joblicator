@@ -158,6 +158,7 @@ export default function ReviewPage() {
   const historyIndexRef = useRef(-1);
   const lastSavedRef = useRef("");
   const saveQueueRef = useRef(Promise.resolve());
+  const isGeneralCv = slug === "general_cv" || review?.application?._system === "general_cv";
 
   const resetHistory = useCallback((nextDraft) => {
     const snapshot = clone(nextDraft);
@@ -170,11 +171,36 @@ export default function ReviewPage() {
 
   const loadJobs = useCallback(async () => {
     try {
-      const data = await api.listApplications();
-      const applications = data.applications || [];
+      const [data, generalCvData] = await Promise.all([
+        api.listApplications(),
+        api.getGeneralCv(),
+      ]);
+      const applications = [...(data.applications || [])];
+      const generalOutput = generalCvData.output;
+      if (generalCvData.review_ready || generalOutput?.files?.some((file) => /_cv\.(?:pdf|html)$/i.test(file))) {
+        applications.unshift({
+          slug: "general_cv",
+          company: "General CV",
+          title: generalCvData.general_cv?.title || "Profile CV",
+          is_general_cv: true,
+          has_output: true,
+          output_folder: generalOutput.folder,
+          files: generalOutput.files,
+        });
+      }
       setJobs(applications);
-      setSlug((current) => current || applications[0]?.slug || "");
+      if (!applications.length) {
+        setSlug("");
+        setReview(null);
+        setDraft(null);
+        setLoading(false);
+        return;
+      }
+      setSlug((current) => applications.some((application) => application.slug === current)
+        ? current
+        : applications[0].slug);
     } catch (error) {
+      setLoading(false);
       showToast(error.message, "error");
     }
   }, [showToast]);
@@ -207,6 +233,14 @@ export default function ReviewPage() {
     setSearchParams({ slug }, { replace: true });
     loadReview(slug);
   }, [slug, loadReview, setSearchParams]);
+
+  useEffect(() => {
+    if (isGeneralCv && documentType !== "cv") {
+      setDocumentType("cv");
+      setActiveSection("summary");
+      setCanvasMode("live");
+    }
+  }, [documentType, isGeneralCv]);
 
   useEffect(() => {
     try {
@@ -312,11 +346,12 @@ export default function ReviewPage() {
       setSaving(true);
       setSaveStatus("saving");
       try {
-        await api.saveReview(slug, {
+        const payload = {
           app_key: review.app_key,
           stage_2: snapshot.stage2,
-          stage_3: snapshot.stage3,
-        });
+        };
+        if (!isGeneralCv) payload.stage_3 = snapshot.stage3;
+        await api.saveReview(slug, payload);
         lastSavedRef.current = snapshotSerialized;
         setSaveStatus("saved");
         if (notify) showToast("Document changes saved");
@@ -332,7 +367,7 @@ export default function ReviewPage() {
 
     saveQueueRef.current = saveQueueRef.current.then(run, run);
     return saveQueueRef.current;
-  }, [draft, review?.app_key, showToast, slug]);
+  }, [draft, isGeneralCv, review?.app_key, showToast, slug]);
 
   useEffect(() => {
     if (!autosave || !dirty || !review?.app_key || saving || exporting) return undefined;
@@ -350,12 +385,28 @@ export default function ReviewPage() {
     try {
       const saved = await persistDraft();
       if (!saved) return;
-      await api.rebuild(slug, { build_targets: "both" });
+      await api.rebuild(slug, { build_targets: isGeneralCv ? "cv" : "both" });
       const refreshed = await api.getReview(slug);
       setReview(refreshed);
-      setPreviewVersion((version) => version + 1);
+      const nextPreviewVersion = Date.now();
+      setPreviewVersion(nextPreviewVersion);
       setCanvasMode("pdf");
-      showToast("CV and cover letter PDFs are ready");
+      if (isGeneralCv) {
+        const refreshedFolder = refreshed.output_folder;
+        const refreshedPdf = findFile(refreshed.files, "_cv.pdf");
+        if (!refreshedFolder || !refreshedPdf) {
+          throw new Error("The General CV was rebuilt, but its PDF could not be resolved.");
+        }
+        const download = document.createElement("a");
+        download.href = api.fileUrl(refreshedFolder, refreshedPdf, { download: true });
+        download.download = refreshedPdf;
+        document.body.appendChild(download);
+        download.click();
+        download.remove();
+        showToast("Your edited General CV PDF is ready and downloading");
+      } else {
+        showToast("CV and cover letter PDFs are ready");
+      }
       await loadJobs();
     } catch (error) {
       showToast(error.message, "error");
@@ -452,16 +503,18 @@ export default function ReviewPage() {
           >
             CV
           </button>
-          <button
-            type="button"
-            className={documentType === "letter" ? "active" : ""}
-            onClick={() => changeDocument("letter")}
-            role="tab"
-            aria-selected={documentType === "letter"}
-            data-testid="letter-tab"
-          >
-            Cover letter
-          </button>
+          {!isGeneralCv && (
+            <button
+              type="button"
+              className={documentType === "letter" ? "active" : ""}
+              onClick={() => changeDocument("letter")}
+              role="tab"
+              aria-selected={documentType === "letter"}
+              data-testid="letter-tab"
+            >
+              Cover letter
+            </button>
+          )}
         </div>
 
         <div className="review-topbar-actions">
@@ -492,7 +545,7 @@ export default function ReviewPage() {
             data-testid="export-button"
           >
             <Icon><path d="M9 2.5v8m0 0 3-3m-3 3-3-3M3.5 12v2h11v-2" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" /></Icon>
-            {exporting ? "Building..." : "Export PDFs"}
+            {exporting ? "Building..." : isGeneralCv ? "Export PDF" : "Export PDFs"}
           </button>
         </div>
       </header>
@@ -502,9 +555,15 @@ export default function ReviewPage() {
           <div className="review-empty-icon">
             <Icon><path d="M5 2.5h5l3 3V15H5zM10 2.5v3h3M7 9h4M7 12h4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" /></Icon>
           </div>
-          <h1>No generated draft yet</h1>
-          <p>Generate this application first, then return here to refine both documents.</p>
-          <Link to="/applications" className="review-empty-action">Open applications</Link>
+          <h1>{jobs.length ? "No generated draft yet" : "No applications yet"}</h1>
+          <p>
+            {jobs.length
+              ? "Generate this application first, then return here to refine both documents."
+              : "Add a job first, then generate its CV and cover letter from Applications."}
+          </p>
+          <Link to={jobs.length ? "/applications" : "/jobs"} className="review-empty-action">
+            {jobs.length ? "Open applications" : "Add a job"}
+          </Link>
         </div>
       ) : (
         <div className="review-studio-workspace">
@@ -517,12 +576,14 @@ export default function ReviewPage() {
                 </span>
                 <span><strong>Curriculum vitae</strong><small>ATS-focused layout</small></span>
               </button>
-              <button type="button" className={documentType === "letter" ? "active" : ""} onClick={() => changeDocument("letter")}>
-                <span className="review-document-icon">
-                  <Icon><path d="M3 4h12v10H3zM3.5 5l5.5 4 5.5-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></Icon>
-                </span>
-                <span><strong>Cover letter</strong><small>Evidence-led narrative</small></span>
-              </button>
+              {!isGeneralCv && (
+                <button type="button" className={documentType === "letter" ? "active" : ""} onClick={() => changeDocument("letter")}>
+                  <span className="review-document-icon">
+                    <Icon><path d="M3 4h12v10H3zM3.5 5l5.5 4 5.5-4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></Icon>
+                  </span>
+                  <span><strong>Cover letter</strong><small>Evidence-led narrative</small></span>
+                </button>
+              )}
             </div>
 
             <div className="review-panel-title review-sections-title">Sections</div>

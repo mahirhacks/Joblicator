@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
   IconApplications,
+  IconGeneralCv,
   IconJobs,
   IconLogo,
   IconProfile,
@@ -15,6 +16,7 @@ const NAV = [
   { to: "/profile", label: "Profile", icon: IconProfile },
   { to: "/jobs", label: "Jobs", icon: IconJobs },
   { to: "/applications", label: "Applications", icon: IconApplications },
+  { to: "/general-cv", label: "General CV", icon: IconGeneralCv },
   { to: "/templates", label: "Templates", icon: IconTemplates },
   { to: "/review", label: "Review", icon: IconReview },
 ];

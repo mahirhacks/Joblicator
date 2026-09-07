@@ -11,9 +11,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
+from joblication_runtime import DATA_ROOT, RESOURCE_ROOT, data_path, ensure_data_workspace
+
 ENGINE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ENGINE_DIR.parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+# PROJECT_ROOT remains the data root for compatibility with stage callers.
+PROJECT_ROOT = DATA_ROOT
+CONFIG_PATH = data_path("config.yaml")
 
 
 def configure_stdio_utf8() -> None:
@@ -46,13 +53,14 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     except ImportError as exc:
         raise ImportError("PyYAML is required. Install with: pip install pyyaml") from exc
 
+    ensure_data_workspace()
     with path.open(encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def resolve_path(config: dict, section: str, key: str, default: str) -> Path:
     rel = config.get(section, {}).get(key, default)
-    path = (PROJECT_ROOT / rel).resolve()
+    path = data_path(str(rel)).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"File not found: {path}")
     return path
@@ -60,7 +68,19 @@ def resolve_path(config: dict, section: str, key: str, default: str) -> Path:
 
 def resolve_output_path(config: dict, key: str, default: str) -> Path:
     rel = config.get("stages", {}).get(key, default)
-    return (PROJECT_ROOT / rel).resolve()
+    return data_path(str(rel)).resolve()
+
+
+def configured_export_dir(config: dict[str, Any] | None = None, template_settings: dict[str, Any] | None = None) -> Path:
+    """Resolve the folder for generated HTML/PDF files."""
+    from joblication_runtime import output_path
+
+    text = ""
+    if isinstance(config, dict):
+        text = str((config.get("export") or {}).get("output_dir") or "").strip()
+    if not text and isinstance(template_settings, dict):
+        text = str((template_settings.get("export") or {}).get("output_dir") or "").strip()
+    return output_path(text or "outputs")
 
 
 def load_json(path: Path) -> dict:
@@ -93,8 +113,8 @@ def build_payload_header(config: dict) -> dict[str, Any]:
 
 
 def ensure_project_path() -> None:
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
+    if str(RESOURCE_ROOT) not in sys.path:
+        sys.path.insert(0, str(RESOURCE_ROOT))
 
 
 def generation_options(config: dict, kind: str) -> dict[str, Any]:
@@ -464,9 +484,59 @@ def iter_applications(
     for index, (slug, application) in enumerate(applications.items(), start=1):
         if not isinstance(application, dict):
             continue
+        if slugs is None and application.get("_system"):
+            continue
         if slugs is not None and slug not in slugs:
             continue
         yield index, f"application_{index}", slug, application
+
+
+def stage_block_for(stage_data: dict[str, Any], app_key: str, slug: str = "") -> dict[str, Any]:
+    """Return a stage payload for this job, preferring source_slug over slot index."""
+    wanted = str(slug or "").strip()
+    direct = stage_data.get(app_key)
+    if isinstance(direct, dict):
+        direct_slug = str(direct.get("source_slug", "")).strip()
+        if not wanted or not direct_slug or direct_slug == wanted:
+            return direct
+    if wanted:
+        for key, value in stage_data.items():
+            if not str(key).startswith("application_") or not isinstance(value, dict):
+                continue
+            if str(value.get("source_slug", "")).strip() == wanted:
+                return value
+    raise ValueError(f"Missing {app_key} in stage payload — run the upstream stage first")
+
+
+def previous_payload_for_slug(
+    existing: dict[str, Any],
+    *,
+    app_key: str,
+    slug: str,
+) -> dict[str, Any] | None:
+    """Reuse a prior draft only when it belongs to the same job slug."""
+    wanted = str(slug or "").strip()
+    if not wanted:
+        previous = existing.get(app_key)
+        return previous if isinstance(previous, dict) else None
+
+    for key, value in existing.items():
+        if not str(key).startswith("application_") or not isinstance(value, dict):
+            continue
+        if str(value.get("source_slug", "")).strip() == wanted:
+            return value
+    return None
+
+
+def bind_source_slug(payload: dict[str, Any], slug: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return payload
+    wanted = str(slug or "").strip()
+    if not wanted:
+        return payload
+    bound = dict(payload)
+    bound["source_slug"] = wanted
+    return bound
 
 
 def parse_build_targets(raw: str | None) -> frozenset[str]:

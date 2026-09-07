@@ -7,6 +7,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from joblication_runtime import data_path, ensure_data_workspace
+
 
 COMPONENTS = (
     ("contact", "Contact", None),
@@ -124,12 +126,13 @@ def visible_generation_keys(layout: Any) -> set[str]:
 
 
 def load_template_settings(root: Path) -> dict[str, Any]:
-    path = root / "settings" / "template.json"
+    ensure_data_workspace()
+    path = data_path("settings", "template.json")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def load_custom_templates(root: Path) -> dict[str, Any]:
-    path = root / "settings" / "custom_templates.json"
+    path = data_path("settings", "custom_templates.json")
     if not path.is_file():
         return {}
     try:
@@ -144,7 +147,7 @@ def application_template_id(root: Path, slug: str | None, settings: dict[str, An
     default_id = str(settings.get("defaults", {}).get("cv", "cv_professional"))
     if not slug:
         return default_id
-    meta_path = root / "applications" / "application_meta.json"
+    meta_path = data_path("applications", "application_meta.json")
     if not meta_path.is_file():
         return default_id
     try:
